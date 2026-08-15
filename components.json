@@ -1,0 +1,6 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "registries": {
+    "@canvas-ui": "https://canvasui.dev/r/{name}.json"
+  }
+}

@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dripping Pickle — real-time lighting test</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 14px; bottom: 12px;
+      font: 11px/1.6 ui-monospace, Consolas, monospace;
+      color: #7f8796; user-select: none; white-space: pre;
+    }
+  </style>
+</head>
+<body>
+  <div id="hud">loading…</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
+    import { RGBELoader }   from 'three/addons/loaders/RGBELoader.js';
+    import { OrbitControls} from 'three/addons/controls/OrbitControls.js';
+    import { createLooks } from '../../tools/looks.js';
+    import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+    import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+
+    // ── grade — these are the numbers we tune to match the Cycles reference ──
+    // Blender was ACES 1.3, exposure 2.5, gamma 1.3. three.js ACES is only an
+    // approximation of that, so EXPOSURE here is a fitted value, not a copy.
+    const q = new URLSearchParams(location.search);
+    // Fitted by eye against reference/dp_lighting_reference.png. It is much higher
+    // than Blender's 2.5 because three.js's ACES is a cheap approximation of the real
+    // ACES 1.3 transform, and Blender's gamma 1.3 lift has no equivalent here.
+    const EXPOSURE     = parseFloat(q.get('exp')  ?? '5.0');
+    const LM_INTENSITY = parseFloat(q.get('lm')   ?? '1.0');
+    // MUST be false. The glTF exporter already flips V on export, so flipping the
+    // texture too puts the lightmap on upside down — which reads as dark bands
+    // across walls and looks convincingly like extra geometry. ?flip=1 to prove it.
+    const FLIP_Y       = (q.get('flip') ?? '0') === '1';
+    const DEBUG_UV     = q.get('debug') === 'uv1';
+    const DEBUG_LM     = q.get('debug') === 'lm';
+    const SIDE = { front: THREE.FrontSide, back: THREE.BackSide, double: THREE.DoubleSide }
+                 [q.get('side') ?? 'double'];
+    const BASE_GREY    = 0xb4b0aa;   // no albedo textures yet — everything is clay
+
+    // The .glb and .hdr are re-exported constantly during art direction, but their
+    // URLs never change — so the browser keeps serving stale copies and you end up
+    // debugging a scene you already fixed. ?v= on the asset URLs forces a refetch.
+    const ASSET_V = q.get('assets') ?? String(Date.now());
+    const bust = (p) => p + '?v=' + ASSET_V;
+
+    const hud = document.getElementById('hud');
+
+    // ?dev=1 for me (writes notes into the repo), ?review=1 for the team
+    // (same panel, falls back to the clipboard since Pages has no server).
+    const FEEDBACK = q.get('dev') === '1' || q.get('review') === '1';
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      // needed so the feedback panel can grab the canvas for a screenshot
+      preserveDrawingBuffer: FEEDBACK,
+    });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = EXPOSURE;
+    // VSM rather than PCF: this scene is one hard sun through a small aperture, and PCF at
+    // a usable map size gives a visibly stair-stepped edge across a 10 m throw. VSM blurs
+    // in shadow space, so softness costs a blur radius instead of more samples.
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.VSMShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    // ── sky ─────────────────────────────────────────────────────────
+    // Blender's world is "Bright Cloud Sky". Nothing here lights the scene —
+    // that all comes from the lightmap — this is purely what you see through
+    // the skylight and the windows.
+    const SKY_ZENITH  = 0x4f9ae4;   // light blue overhead
+    const SKY_HORIZON = 0xcbe8fb;   // very pale sky at the horizon
+    const SKY_GROUND  = 0x6b6459;   // below the horizon, barely ever seen
+    const SKY_GAIN    = parseFloat(q.get('sky') ?? '0.55');  // pre-tonemap; 1.0 clips to white
+
+    // ── atmosphere ──────────────────────────────────────────────────
+    // Blender coords for the skylight glazing, converted to three's Y-up
+    // (blender x,y,z -> three x,z,-y):
+    //   glazing spans x -1.8..5.6, y(up) 4.0..7.2, z -3.8..-1.7
+    const FLOOR_Y     = -2.28;   // lifted 2 cm in Blender to close the light leak
+    // Measured from the bake, not guessed: the lit centroid on the floor sits at
+    // (-2.56, -2.30, 1.31) and the glazing centre at (1.90, 5.59, -2.76), which
+    // puts the light 37.4° off vertical.
+    const GLAZING     = new THREE.Vector3(1.90, 5.59, -2.76);
+    const LIGHT_DIR   = new THREE.Vector3(-0.449, -0.794, 0.409).normalize();
+    const SHAFT_LEN   = 9.94;                    // glazing to floor along that ray
+    // Bay centres sit between the real window bars (x = -2.74, -1.32, -0.21,
+    // 0.79, 1.91, 2.85), so the beams line up with the mullion shadows already
+    // baked into the floor.
+    const SHAFT_X     = [-2.03, -0.77, 0.29, 1.35, 2.38, 3.90];
+    // Wide enough that neighbouring bays overlap into one body of light rather
+    // than reading as six separate blades.
+    const SHAFT_W     = parseFloat(q.get('shaftw')?? '2.9');
+    const SHAFT_GAIN  = parseFloat(q.get('shaft') ?? '0.095');
+    const SHAFT_COLOR = 0xf0ece6;   // near-neutral; the warmth is in the brick
+
+    // Dust only exists where the light is. Elsewhere there is nothing to catch it.
+    const DUST_COUNT  = parseInt(q.get('dust') ?? '18000', 10);
+    const DUST_GAIN   = parseFloat(q.get('dustg') ?? '0.28');
+    const DUST_SIZE   = parseFloat(q.get('dusts') ?? '0.013');
+    const DUST_SPEED  = parseFloat(q.get('dustv') ?? '0.00045');
+    const DUST_SPREAD = parseFloat(q.get('dustr') ?? '0.28');  // jitter around the beam
+
+    // ── real-time lighting experiment ────────────────────────────────
+    // The baked scene has NO lights at all — every photon is in the lightmap. This copy
+    // puts real ones back to see how close a browser can get to the bake without it.
+    // Nothing here is meant to beat a path-traced bake; it is a measurement of the gap.
+    //
+    // The rig is built entirely from numbers already measured for the bake, which is why
+    // it lands roughly right on the first try: the glazing centre, the 37.4°-off-vertical
+    // light direction, and the floor height.
+    const RT_MODE   = q.get('mode') ?? 'rt';    // 'rt' | 'baked' | 'both'
+    // Defaults FITTED against the bake rather than guessed. Sweeping ambient down and sun up
+    // and comparing frame statistics to the baked render (mean 87.9, sd 85.1, 30.1% of pixels
+    // below luma 20) landed here: 84.1 / 78.1 / 24.2. The first guess — a bright sky and a
+    // strong hemisphere — measured 98.5 / 71.2 / 5.3, i.e. far too flat, because uniform
+    // ambient fills exactly the darks that real GI leaves occluded.
+    const RT_SUN    = parseFloat(q.get('sun')    ?? '3.2');   // direct sun through the glazing
+    const RT_SKYL   = parseFloat(q.get('skyl')   ?? '1.2');   // area light filling the aperture
+    const RT_BOUNCE = parseFloat(q.get('bounce') ?? '0.12');  // the cheap stand-in for GI
+    const RT_ENVI   = parseFloat(q.get('envi')   ?? '0.40');  // IBL from the procedural sky
+    const RT_AO     = q.get('ao') !== '0';
+    const RT_SOFT   = parseFloat(q.get('soft')   ?? '2.5');   // sun angular size -> shadow softness
+
+    const scene = new THREE.Scene();
+
+    const sky = new THREE.Mesh(
+      new THREE.SphereGeometry(400, 32, 24),
+      new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: {
+          uZenith:  { value: new THREE.Color(SKY_ZENITH) },
+          uHorizon: { value: new THREE.Color(SKY_HORIZON) },
+          uGround:  { value: new THREE.Color(SKY_GROUND) },
+          uGain:    { value: SKY_GAIN }
+        },
+        vertexShader: `
+          varying vec3 vDir;
+          void main() {
+            vDir = normalize(position);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }`,
+        fragmentShader: `
+          uniform vec3 uZenith, uHorizon, uGround;
+          uniform float uGain;
+          varying vec3 vDir;
+          void main() {
+            float h = vDir.y;
+            // tight falloff near the horizon, slow fade to zenith — a flat
+            // linear ramp reads as a computer gradient, this reads as air
+            vec3 up   = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.45));
+            vec3 down = mix(uHorizon, uGround, pow(clamp(-h, 0.0, 1.0), 0.5));
+            gl_FragColor = vec4((h > 0.0 ? up : down) * uGain, 1.0);
+          }`
+      })
+    );
+    sky.renderOrder = -1;          // paint it first, everything else draws over
+    sky.frustumCulled = false;
+    scene.add(sky);
+
+    // ── the lighting rig ─────────────────────────────────────────────
+    RectAreaLightUniformsLib.init();
+    const rig = new THREE.Group();
+    rig.name = 'RealtimeRig';
+    scene.add(rig);
+
+    // Where the light lands, measured off the bake — the sun aims here, not at the origin.
+    const LIT_CENTROID = new THREE.Vector3(-2.56, -2.30, 1.31);
+
+    // 1. SUN. Placed back along the measured ray from the glazing so its shadows fall exactly
+    //    where the baked mullion shadows already are.
+    const sun = new THREE.DirectionalLight(0xfff3e0, RT_SUN);
+    sun.position.copy(GLAZING).sub(LIGHT_DIR.clone().multiplyScalar(14));
+    sun.target.position.copy(LIT_CENTROID);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    // A tight ortho box is the whole game for shadow resolution: 2048 across 16 units is
+    // ~8 texels/cm, across the default 100 it would be 1.3.
+    const sc = sun.shadow.camera;
+    sc.left = -9; sc.right = 9; sc.top = 9; sc.bottom = -9;
+    sc.near = 1; sc.far = 34;
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.02;
+    sun.shadow.radius = RT_SOFT;      // VSM blur, i.e. the sun's apparent size
+    sun.shadow.blurSamples = 12;
+    rig.add(sun, sun.target);
+
+    // 2. SKYLIGHT. A rect area light filling the actual glazing aperture, which is what makes
+    //    the room read as lit THROUGH a hole rather than by a floating lamp. RectAreaLight
+    //    casts no shadow in three, so it is fill only — the sun above owns the shadows.
+    //    Glazing spans x -1.8..5.6 and z -3.8..-1.7 (7.4 x 2.1) per the bake notes.
+    const skylight = new THREE.RectAreaLight(0xbfd8f2, RT_SKYL, 7.4, 2.1);
+    skylight.position.copy(GLAZING);
+    skylight.lookAt(LIT_CENTROID);
+    rig.add(skylight);
+
+    // 3. BOUNCE. Not GI — a hemisphere light standing in for it. Sky colour from above,
+    //    warm floorboard colour from below, so surfaces facing down pick up the floor the
+    //    way they would with a real bounce. It is the cheapest 80% of the look.
+    const bounce = new THREE.HemisphereLight(SKY_HORIZON, 0x6b5844, RT_BOUNCE);
+    rig.add(bounce);
+
+    // 4. IBL. The procedural sky already in this scene, PMREM'd into a real environment —
+    //    so reflections and rough highlights agree with what is visible through the window
+    //    instead of being invented. Built from a scene holding ONLY the sky.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const skyOnly = new THREE.Scene();
+    const skyProbeMesh = new THREE.Mesh(sky.geometry, sky.material);
+    skyOnly.add(skyProbeMesh);
+    const envRT = pmrem.fromScene(skyOnly, 0.04);
+    scene.environment = envRT.texture;
+    scene.environmentIntensity = RT_ENVI;
+
+    function setRigEnabled(on) {
+      rig.visible = on;
+      scene.environmentIntensity = on ? RT_ENVI : 0;
+    }
+
+    // ── light shafts ────────────────────────────────────────────────
+    // Real volumetrics are far too expensive. These are crossed additive
+    // planes with a gradient — brightest at the glazing, weaker by the time
+    // they reach the floor, soft at the edges, breathing slowly. Once the
+    // eye has the dust to agree with, it reads as air.
+    const shaftMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, fog: false,
+      blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      uniforms: {
+        uColor: { value: new THREE.Color(SHAFT_COLOR) },
+        uGain:  { value: SHAFT_GAIN },
+        uTime:  { value: 0 }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        varying float vFacing;
+        void main() {
+          vUv = uv;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vec3 n = normalize(normalMatrix * normal);
+          vFacing = abs(dot(n, normalize(-mv.xyz)));
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        uniform vec3 uColor; uniform float uGain, uTime;
+        varying vec2 vUv;
+        varying float vFacing;
+        void main() {
+          float fall  = mix(0.30, 1.0, pow(vUv.y, 0.85));   // still lit where it lands
+          float edge  = pow(sin(clamp(vUv.x, 0.0, 1.0) * 3.14159), 1.4);
+          // A plane seen edge-on collapses to a bright hairline. Fading by facing
+          // angle removes those thin streaks and leaves only the soft body.
+          float face  = smoothstep(0.0, 0.55, vFacing);
+          float drift = 0.88 + 0.12 * sin(uTime * 0.18 + vUv.y * 2.5 + vUv.x * 1.7);
+          gl_FragColor = vec4(uColor, uGain * fall * edge * face * drift);
+        }`
+    });
+
+    const shaftMats = [];
+    const shaftGroups = [];       // handles for the Volumetrics toggle in the looks bar
+
+    // How the atmosphere combines with what is behind it. Additive is the physical answer
+    // for light in air and is the default, but under a stylised look it is often the wrong
+    // one — a halftone wants the shafts to knock back rather than pile on.
+    // Screen is not a three constant; it is CustomBlending with 1 / (1 - src).
+    const BLEND_OPTS = [
+      { label: 'Additive', value: 'add' },
+      { label: 'Screen', value: 'screen' },
+      { label: 'Normal', value: 'normal' },
+      { label: 'Multiply', value: 'multiply' },
+      { label: 'Subtractive', value: 'sub' },
+    ];
+    function setBlending(mat, mode) {
+      if (mode === 'screen') {
+        mat.blending = THREE.CustomBlending;
+        mat.blendEquation = THREE.AddEquation;
+        mat.blendSrc = THREE.OneFactor;
+        mat.blendDst = THREE.OneMinusSrcColorFactor;
+      } else {
+        mat.blending = mode === 'normal'   ? THREE.NormalBlending
+                     : mode === 'multiply' ? THREE.MultiplyBlending
+                     : mode === 'sub'      ? THREE.SubtractiveBlending
+                     :                       THREE.AdditiveBlending;
+      }
+      mat.needsUpdate = true;     // blending is compiled in; without this nothing changes
+    }
+    // point each group's local -Y down the measured light ray
+    const shaftQuat = new THREE.Quaternion().setFromUnitVectors(
+      new THREE.Vector3(0, -1, 0), LIGHT_DIR);
+
+    for (let i = 0; i < SHAFT_X.length; i++) {
+      const g = new THREE.Group();
+      g.position.set(SHAFT_X[i], GLAZING.y, GLAZING.z);
+      g.quaternion.copy(shaftQuat);
+      const m = shaftMat.clone();
+      shaftMats.push(m);
+      for (let k = 0; k < 2; k++) {        // crossed, so it never vanishes edge-on
+        const p = new THREE.Mesh(new THREE.PlaneGeometry(SHAFT_W, SHAFT_LEN), m);
+        p.position.y = -SHAFT_LEN / 2;
+        p.rotation.y = k * Math.PI / 2;
+        g.add(p);
+      }
+      g.renderOrder = 10;
+      shaftGroups.push(g);
+      scene.add(g);
+    }
+
+    // ── dust ────────────────────────────────────────────────────────
+    // Points are square by default; a soft radial sprite turns them into
+    // round out-of-focus motes. This is the single detail people notice.
+    function softDot() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      g.addColorStop(0.0, 'rgba(255,255,255,1)');
+      g.addColorStop(0.3, 'rgba(255,255,255,0.5)');
+      g.addColorStop(1.0, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 64, 64);
+      return new THREE.CanvasTexture(c);
+    }
+
+    const dustPos = new Float32Array(DUST_COUNT * 3);
+    const dustPhase = new Float32Array(DUST_COUNT);
+
+    // Seed each mote INSIDE the beam volume: pick a spot on the glazing, walk a
+    // random distance down the light ray, then jitter sideways. Nothing outside
+    // the shafts, because outside them there's no light to catch dust.
+    const gxMin = SHAFT_X[0] - SHAFT_W * 0.5;
+    const gxMax = SHAFT_X[SHAFT_X.length - 1] + SHAFT_W * 0.5;
+    function seedMote(i, alongTop) {
+      const t = alongTop ? Math.random() * 0.15 * SHAFT_LEN : Math.random() * SHAFT_LEN;
+      const x = gxMin + Math.random() * (gxMax - gxMin);
+      const z = GLAZING.z + (Math.random() - 0.5) * SHAFT_W;
+      // gaussian-ish jitter so density falls off toward the beam edges
+      const j = () => (Math.random() + Math.random() + Math.random() - 1.5) * DUST_SPREAD;
+      dustPos[i*3+0] = x + LIGHT_DIR.x * t + j();
+      dustPos[i*3+1] = GLAZING.y + LIGHT_DIR.y * t + j() * 0.5;
+      dustPos[i*3+2] = z + LIGHT_DIR.z * t + j();
+      dustPhase[i] = Math.random() * Math.PI * 2;
+    }
+    for (let i = 0; i < DUST_COUNT; i++) seedMote(i, false);
+    const dustGeo = new THREE.BufferGeometry();
+    dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+    const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+      color: 0xf6efe2, size: DUST_SIZE, map: softDot(),
+      transparent: true, opacity: DUST_GAIN,
+      blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+    }));
+    dust.renderOrder = 11;
+    scene.add(dust);
+
+    let camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 500);
+
+    // Stylised looks. ?look=<id> preselects one, ?looks=0 hides the menu for a clean
+    // capture. 'original' bypasses the composer entirely, so the default is byte-for-byte
+    // the image this scene rendered before any of this existed.
+    // getCamera, not camera: the glTF's own camera replaces this one once the model
+    // loads, and a RenderPass holding the original object would render an empty frame.
+    // Ground-truth-ish occlusion. GTAO darkens contact and creases, which is most of what
+    // reads as "GI" to the eye once the direct light is right. Guarded because it is the one
+    // pass here that can fail outright on a driver.
+    let aoPass = null;
+    if (RT_AO) {
+      try {
+        aoPass = new GTAOPass(scene, camera, innerWidth, innerHeight);
+        aoPass.output = GTAOPass.OUTPUT.Default;
+      } catch (e) {
+        console.warn('GTAO unavailable:', e);
+        aoPass = null;
+      }
+    }
+
+    const looks = createLooks({
+      renderer, scene, getCamera: () => camera,
+      initial: q.get('look') || 'original',
+      menu: q.get('looks') !== '0',
+      // Shafts and dust are one atmospheric effect, and both blend additively — they
+      // accumulate differently through a post chain than they do straight to the canvas,
+      // so a look can change them more than it changes the room.
+      extraPasses: aoPass ? [aoPass] : [],
+      volumetrics: [...shaftGroups, dust],
+      volumetricsOn: q.get('vol') !== '0',
+      // Live levels. Each shaft is a CLONE of shaftMat, so every clone's uniform has to
+      // be written — setting it on the original moves nothing.
+      dials: [
+        // 0.4 was mostly unusable headroom — everything that reads well lives under ~0.15,
+        // and the curve puts two thirds of the travel below the 0.095 default.
+        { id: 'shaft', label: 'Shafts', min: 0, max: 0.2, curve: 2.2, value: SHAFT_GAIN,
+          onInput: (v) => { for (const m of shaftMats) m.uniforms.uGain.value = v; } },
+        // Same story as the shafts: opacity 1.0 is snow, and the levels that read as
+        // "air with something in it" all sit low. Capped and curved to match.
+        { id: 'dustg', label: 'Dust', min: 0, max: 0.6, curve: 2.0, value: DUST_GAIN,
+          onInput: (v) => { dust.material.opacity = v; } },
+        // The default sat at 19% of a linear 0.002..0.06, so four fifths of the slider
+        // made motes bigger and the fine end — where the difference between dust and
+        // snow lives — had almost no travel. Curved, and capped where they stop reading
+        // as dust at all.
+        { id: 'dusts', label: 'Dust size', min: 0.002, max: 0.04, curve: 2.0, value: DUST_SIZE,
+          onInput: (v) => { dust.material.size = v; } },
+        { id: 'sun', label: 'Sun', min: 0, max: 8, curve: 1.6, value: RT_SUN,
+          onInput: (v) => { sun.intensity = v; } },
+        { id: 'skyl', label: 'Skylight', min: 0, max: 8, curve: 1.6, value: RT_SKYL,
+          onInput: (v) => { skylight.intensity = v; } },
+        { id: 'bounce', label: 'Bounce', min: 0, max: 2, curve: 1.6, value: RT_BOUNCE,
+          onInput: (v) => { bounce.intensity = v; } },
+        { id: 'envi', label: 'Sky IBL', min: 0, max: 3, curve: 1.4, value: RT_ENVI,
+          onInput: (v) => { if (rig.visible) scene.environmentIntensity = v; } },
+        { id: 'soft', label: 'Shadow soften', min: 0, max: 12, curve: 1.4, value: RT_SOFT,
+          onInput: (v) => { sun.shadow.radius = v; } },
+      ],
+
+      choices: [
+        { id: 'mode', label: 'Lighting', value: RT_MODE,
+          options: [{ label: 'Real-time', value: 'rt' }, { label: 'Baked', value: 'baked' },
+                    { label: 'Both', value: 'both' }],
+          onChange: (v) => window.__rt && window.__rt.applyLightingMode(v) },
+        { id: 'shaftblend', label: 'Shaft blend', value: q.get('shaftblend') || 'add', options: BLEND_OPTS,
+          onChange: (v) => { for (const m of shaftMats) setBlending(m, v); } },
+        { id: 'dustblend', label: 'Dust blend', value: q.get('dustblend') || 'add', options: BLEND_OPTS,
+          onChange: (v) => setBlending(dust.material, v) },
+      ],
+    });
+    camera.position.set(-12, 2, 0);
+
+    let controls;
+
+    const state = { meshes: 0, withLM: 0, tris: 0, cam: 'fallback' };
+
+    // Horizontal field of view is the thing to preserve across canvas shapes —
+    // it is what Blender holds constant for a landscape render.
+    let hFov = null, authoredAspect = null;
+    function applyFov() {
+      camera.aspect = innerWidth / innerHeight;
+      if (hFov) {
+        camera.fov = THREE.MathUtils.radToDeg(
+          2 * Math.atan(Math.tan(hFov / 2) / camera.aspect));
+      }
+      camera.updateProjectionMatrix();
+    }
+
+    // The lightmap is a real HDR: the window is ~9x brighter than the floor.
+    // An 8-bit PNG would clip that off, which is why this is .hdr.
+    new RGBELoader().load(bust('../../assets/factory/lightmap_4k.hdr'), (lm) => {
+      lm.flipY = FLIP_Y;              // glTF UVs are top-left origin; Blender's are bottom-left
+      lm.channel = 1;                 // sample using uv1 (TEXCOORD_1) = our Lightmap set
+      lm.colorSpace = THREE.LinearSRGBColorSpace;
+      // Mipmaps ON. They were off for a while because the floor rendered black
+      // and mip bleed looked like the culprit — it was actually the uv2 channel
+      // bug. Without mipmaps a 4096 atlas aliases badly on distant or angled
+      // surfaces, and single bright texels sparkle through as speckles on brick.
+      // The 16px bake margin gives the mip chain room to average into.
+      const MIPS = (q.get('mip') ?? '1') === '1';
+      lm.generateMipmaps = MIPS;
+      lm.minFilter = MIPS ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      lm.magFilter = THREE.LinearFilter;
+      lm.wrapS = lm.wrapT = THREE.ClampToEdgeWrapping;
+      lm.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      lm.needsUpdate = true;
+
+      // Blender re-creates an "automap" UV set during modifier evaluation on a few
+      // objects, so those export THREE UV sets and the lightmap lands on uv2 instead
+      // of uv1. three.js binds a UV channel to the TEXTURE, not the mesh — so we need
+      // one texture instance per channel and pick the right one per mesh.
+      const lmForChannel = {};
+      const lightmapFor = (geom) => {
+        const ch = geom.attributes.uv2 ? 2 : (geom.attributes.uv1 ? 1 : 0);
+        if (!lmForChannel[ch]) {
+          const t = lm.clone();
+          t.channel = ch;
+          t.needsUpdate = true;
+          lmForChannel[ch] = t;
+        }
+        return { tex: lmForChannel[ch], ch };
+      };
+
+      new GLTFLoader().load(bust('../../assets/factory/factory.glb'), (gltf) => {
+        const chCount = {};
+        gltf.scene.traverse((o) => {
+          if (o.isMesh) {
+            state.meshes++;
+            state.tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+            const picked = lightmapFor(o.geometry);
+            chCount[picked.ch] = (chCount[picked.ch] || 0) + 1;
+            state.channels = chCount;
+            const hasUV1 = picked.ch > 0;
+            if (DEBUG_LM) {
+              // Sample the atlas with uv1 and show it raw. This separates
+              // "is the texture being read correctly" from "is the lighting maths right".
+              o.material = new THREE.ShaderMaterial({
+                side: THREE.DoubleSide,
+                uniforms: { tLM: { value: picked.tex }, uScale: { value: LM_INTENSITY } },
+                vertexShader: (picked.ch === 2 ? 'attribute vec2 uv2;\n#define LMUV uv2\n'
+                                               : 'attribute vec2 uv1;\n#define LMUV uv1\n') + `
+                  varying vec2 vUv1;
+                  void main() {
+                    vUv1 = LMUV;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                  }`,
+                fragmentShader: `
+                  uniform sampler2D tLM;
+                  uniform float uScale;
+                  varying vec2 vUv1;
+                  void main() {
+                    vec3 c = texture2D(tLM, vUv1).rgb * uScale;
+                    c = c / (1.0 + c);                 // squash the HDR range so I can see it
+                    gl_FragColor = vec4(pow(c, vec3(1.0/2.2)), 1.0);
+                  }`
+              });
+            } else if (DEBUG_UV) {
+              // paint uv1 straight into RGB. If the lightmap UVs are sane, every
+              // object shows a smooth red/green ramp. Garbage here = bad UVs,
+              // and there is no point tuning flips or exposure until it's clean.
+              o.material = new THREE.ShaderMaterial({
+                side: THREE.DoubleSide,
+                vertexShader: `
+                  attribute vec2 uv1;
+                  varying vec2 vUv1;
+                  void main() {
+                    vUv1 = uv1;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                  }`,
+                fragmentShader: `
+                  varying vec2 vUv1;
+                  void main() { gl_FragColor = vec4(vUv1.x, vUv1.y, 0.0, 1.0); }`
+              });
+            } else {
+              // Keep the material glTF gave us — it carries the brick, wood and
+              // the sign cut-outs. We only bolt the lightmap onto it.
+              const mats = Array.isArray(o.material) ? o.material : [o.material];
+              for (const mat of mats) {
+                if (hasUV1) {
+                  mat.lightMap = picked.tex;
+                  mat.lightMapIntensity = LM_INTENSITY;
+                  // Real lights ADD to the lightmap rather than replacing it, so leaving both
+                  // on doubles the exposure. Held on the material so the mode toggle can swap
+                  // between them without reloading the glb.
+                  mat.userData.bakedLightMap = picked.tex;
+                  mat.envMapIntensity = 1.0;
+                }
+
+                // Almost every material arrives flagged transparent. Blended
+                // transparency does not write depth, so solid brick sorts against
+                // solid brick back-to-front and punches holes through itself.
+                // Only real glass wants blending; cut-outs (the signs) want
+                // alpha-test, which DOES write depth and sorts correctly.
+                if (mat.transparent) {
+                  const isGlass = /glass/i.test(mat.name || '');
+                  if (isGlass) {
+                    mat.depthWrite = false;
+                    mat.opacity = 0.25;
+                  } else if (mat.map && /sign/i.test(mat.name || '')) {
+                    mat.transparent = false;
+                    mat.alphaTest = 0.5;
+                    mat.depthWrite = true;
+                  } else {
+                    mat.transparent = false;
+                    mat.alphaTest = 0;
+                    mat.depthWrite = true;
+                  }
+                }
+                // Blender's viewport draws both faces; glTF defaults to single-sided.
+                // Standing INSIDE the room we look at the back of every wall, so
+                // single-sided culls them and you see straight through into unlit space.
+                mat.side = SIDE;
+                // Roughness/metal maps were stripped on export; with no dynamic
+                // lights they contribute nothing. Push the constants somewhere sane
+                // so nothing reads as wet plastic.
+                if (mat.isMeshStandardMaterial) {
+                  mat.roughness = 1.0;
+                  mat.metalness = 0.0;
+                }
+                mat.needsUpdate = true;
+              }
+            }
+            if (hasUV1) state.withLM++;
+          }
+          if (o.isCamera) {
+            camera = o;
+            // glTF stores VERTICAL fov only. Blender's sensor_fit=AUTO fits the
+            // sensor HORIZONTALLY on a landscape frame, so the vertical fov it
+            // exports is only correct at Blender's own render aspect. Stretch the
+            // canvas wider and the vertical fov stays put while the horizontal
+            // opens up — you start seeing walls the Blender camera never showed.
+            // Lock the HORIZONTAL fov instead, and re-derive vertical from it.
+            authoredAspect = camera.aspect || (innerWidth / innerHeight);
+            const vfov = THREE.MathUtils.degToRad(camera.fov);
+            hFov = 2 * Math.atan(Math.tan(vfov / 2) * authoredAspect);
+            applyFov();
+            state.cam = (o.name || 'from glb') +
+              ` hfov ${(THREE.MathUtils.radToDeg(hFov)).toFixed(1)}°`;
+          }
+        });
+        scene.add(gltf.scene);
+        window.__scene = scene;   // debug handles
+        window.__T = THREE;
+
+        // ?flat=1 — unlit albedo only, no lighting at all. This is the apples-to-
+        // apples comparison against Blender's Material preview: if THIS matches
+        // and the lit version doesn't, the geometry is fine and it's the lightmap.
+        if (q.get('flat') === '1') {
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            const swap = (m) => new THREE.MeshBasicMaterial({
+              map: m.map || null,
+              color: m.map ? 0xffffff : 0xb0aca4,
+              side: m.side, transparent: m.transparent,
+              alphaTest: m.alphaTest, depthWrite: m.depthWrite
+            });
+            o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+          });
+          renderer.toneMapping = THREE.NoToneMapping;
+        }
+
+        // Point the orbit target down the camera's OWN forward axis, so the opening
+        // frame is exactly the Blender camera rather than being yanked to the origin.
+        // glTF wraps the camera in a correction node. OrbitControls reads world
+        // space but writes camera.position in LOCAL space, so a parent transform
+        // displaces the camera the moment controls initialise. Detach it first,
+        // keeping its world placement.
+        // Every loaded mesh both casts and receives. 76 meshes / 125k tris is small enough
+        // that being selective would be premature — measure before trimming.
+        gltf.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          o.castShadow = true;
+          o.receiveShadow = true;
+        });
+
+        // Baked and real-time are mutually exclusive by default: the lightmap already
+        // contains the bounce the rig is trying to reproduce.
+        function applyLightingMode(mode) {
+          const useBaked = mode === 'baked' || mode === 'both';
+          const useRT = mode === 'rt' || mode === 'both';
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+              if (!m || !m.userData) continue;
+              const baked = m.userData.bakedLightMap;
+              if (baked === undefined) continue;
+              const want = useBaked ? baked : null;
+              if (m.lightMap !== want) { m.lightMap = want; m.needsUpdate = true; }
+              m.lightMapIntensity = useBaked ? LM_INTENSITY : 0;
+            }
+          });
+          setRigEnabled(useRT);
+          hud.textContent = hud.textContent.replace(/\nlighting .*/, '') +
+            `\nlighting ${mode}`;
+        }
+        applyLightingMode(RT_MODE);
+        window.__rt = { applyLightingMode, rig, sun, skylight, bounce, setRigEnabled };
+
+        if (camera.parent && camera.parent !== scene) {
+          scene.attach(camera);
+        }
+        if (q.get('nocontrols') === '1') {
+          hud.textContent += '\ncontrols OFF — raw glTF camera';
+          return;
+        }
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        const fwd = new THREE.Vector3();
+        camera.getWorldDirection(fwd);
+        controls.target.copy(camera.getWorldPosition(new THREE.Vector3()).add(fwd.multiplyScalar(12)));
+        controls.update();
+
+        hud.textContent =
+          `meshes ${state.meshes}  lightmapped ${state.withLM}  tris ${Math.round(state.tris).toLocaleString()}\n` +
+          `camera ${state.cam}  exposure ${EXPOSURE}  lm ${LM_INTENSITY}`;
+
+        if (FEEDBACK) {
+          import('../../tools/feedback.js').then(({ initFeedback }) => {
+            initFeedback({ scene, camera, renderer, controls,
+                           pickRoot: gltf.scene, loop: 'factory' });
+          });
+        }
+      }, undefined, (e) => { hud.textContent = 'GLB FAILED: ' + e; });
+    }, undefined, (e) => { hud.textContent = 'HDR FAILED: ' + e; });
+
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const t = clock.getElapsedTime();
+
+      for (let i = 0; i < shaftMats.length; i++) shaftMats[i].uniforms.uTime.value = t + i * 1.7;
+
+      // barely-there drift. Real dust in still air hangs; it does not stream.
+      const p = dustGeo.attributes.position.array;
+      for (let i = 0; i < DUST_COUNT; i++) {
+        p[i*3+1] += DUST_SPEED;
+        p[i*3+0] += Math.sin(t * 0.05 + dustPhase[i]) * 0.00018;
+        p[i*3+2] += Math.cos(t * 0.04 + dustPhase[i] * 1.3) * 0.00014;
+        if (p[i*3+1] > GLAZING.y) seedMote(i, false);   // respawn inside the beam
+      }
+      dustGeo.attributes.position.needsUpdate = true;
+
+      if (controls) controls.update();
+      looks.render(t);
+    });
+
+    addEventListener('resize', () => {
+      applyFov();
+      renderer.setSize(innerWidth, innerHeight);
+      looks.setSize(innerWidth, innerHeight);
+      if (aoPass) aoPass.setSize(innerWidth, innerHeight);
+    });
+  </script>
+</body>
+</html>

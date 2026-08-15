@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loops</title>
+  <style>
+    :root {
+      --bg: #0b0e14; --panel: #12161f; --line: #1f2532;
+      --ink: #e8eaf0; --soft: #8b93a7; --accent: #c9a227;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+      font: 15px/1.6 -apple-system, "Segoe UI", sans-serif;
+      padding: 8vh 6vw;
+    }
+    h1 { font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
+         color: var(--soft); font-weight: 500; margin: 0 0 4px; }
+    .lede { color: var(--soft); max-width: 52ch; margin: 0 0 48px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); max-width: 1100px; }
+    a.card {
+      display: block; padding: 22px 24px; text-decoration: none; color: inherit;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+      transition: border-color .18s, transform .18s;
+    }
+    a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    .name { font-size: 18px; margin-bottom: 6px; }
+    .desc { color: var(--soft); font-size: 14px; }
+    .tag { display: inline-block; margin-top: 14px; font-size: 11px; letter-spacing: .14em;
+           text-transform: uppercase; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <h1>Loops</h1>
+  <p class="lede">Real-time scenes that run in a browser. Open one on any screen — no install, no download.</p>
+
+  <div class="grid">
+    <a class="card" href="loops/dust-and-light/">
+      <div class="name">Dust and Light</div>
+      <div class="desc">Look test. Light shafts, drifting dust, baked-feel shadows — atmosphere only, no custom models yet.</div>
+      <span class="tag">Look test</span>
+    </a>
+  </div>
+</body>
+</html>
