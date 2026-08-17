@@ -6,7 +6,7 @@
   <title>Loops</title>
   <style>
     :root {
-      --bg: #0b0e14; --panel: #12161f; --line: #1f2532;
+      --bg: #0b0e14; --panel: #12161f; --line: #1f2532; --line2: #2a3040;
       --ink: #e8eaf0; --soft: #8b93a7; --accent: #c9a227;
     }
     * { box-sizing: border-box; }
@@ -18,59 +18,136 @@
     h1 { font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
          color: var(--soft); font-weight: 500; margin: 0 0 4px; }
     .lede { color: var(--soft); max-width: 52ch; margin: 0 0 48px; }
+    /* One heading per Loop. LOOPS above is the page's label; these are the shows, so they
+       are the thing you actually read down the page — full size, in ink, not a tiny caption. */
+    h2 { font-size: 20px; font-weight: 600; color: var(--ink); margin: 0; letter-spacing: 0; }
+    section { margin: 0 0 44px; max-width: 1100px; }
+    .shead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+             margin: 0 0 14px; padding-bottom: 10px; border-bottom: 2px solid var(--line2); }
+    /* Each Loop owns its own tracker, so its open count belongs on its own header rather
+       than in one pile at the bottom of the page. */
+    .notes { margin-left: auto; font-size: 13px; color: var(--soft); text-decoration: none;
+             border-bottom: 1px solid transparent; }
+    .notes:hover { color: var(--ink); border-bottom-color: var(--line2); }
+    .notes.hot { color: var(--accent); }
+    .state { font: 11px/1 ui-monospace, Consolas, monospace; letter-spacing: .14em;
+             text-transform: uppercase; color: var(--soft); }
     .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); max-width: 1100px; }
-    a.card {
+    /* Styled on .card, not a.card, so a planned loop can be a plain div and still look
+       like one of the set. */
+    .card {
       display: block; padding: 22px 24px; text-decoration: none; color: inherit;
       background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
       transition: border-color .18s, transform .18s;
     }
     a.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+    /* A card with a picture: the image goes edge to edge, so the padding moves inside. */
+    .card.hero { padding: 0; overflow: hidden; }
+    .thumb { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10;
+             object-fit: cover; background: #0c0f16; border-bottom: 1px solid var(--line); }
+    .card.hero .body { padding: 18px 22px 20px; }
+    /* Not started. A DIV, never an anchor — nothing to click, nothing to tab to, and no
+       dead link for someone to report as broken. */
+    .card.soon { opacity: .42; cursor: default; }
     .name { font-size: 18px; margin-bottom: 6px; }
     .desc { color: var(--soft); font-size: 14px; }
     .tag { display: inline-block; margin-top: 14px; font-size: 11px; letter-spacing: .14em;
            text-transform: uppercase; color: var(--accent); }
+    .tag.soon { color: var(--soft); }
     .foot { margin: 40px 0 0; color: var(--soft); font-size: 14px; max-width: 1100px;
             border-top: 1px solid var(--line); padding-top: 20px; }
   </style>
 </head>
 <body>
   <h1>Loops</h1>
-  <p class="lede">Real-time scenes that run in a browser. Open one on any screen — no install, no
-  download. Add <code>?review=1</code> to any of them to click an object and leave a note; it copies
-  the note plus a link back to the exact camera angle you were looking from.</p>
 
-  <div class="grid">
-    <a class="card" href="loops/factory/">
-      <div class="name">The Dripping Pickle</div>
-      <div class="desc">The factory interior. Lighting is baked to a 4K map in Blender, so the
-      shadows and bounce are the real thing rather than an approximation. 265 objects, 428k
-      triangles. Thirteen stylised looks in the panel, bottom-left.</div>
-      <span class="tag">Main scene</span>
-    </a>
+  <!-- One section per Loop, in the order they should be read. `data-project` must match an
+       id in loops.json — that is what pairs the header with its notes. A Loop that has not
+       started gets a div.card.soon with no href: nothing to click, nothing to tab to, and no
+       dead link for a reviewer to file. -->
+  <section data-project="dripping-pickle">
+    <div class="shead">
+      <h2>The Dripping Pickle</h2>
+      <span class="state">Live</span>
+      <a class="notes" href="feedback/?project=dripping-pickle">notes</a>
+    </div>
+    <div class="grid">
+      <!-- The hero. Its thumbnail is a real capture of the scene at its own loop camera,
+           taken with tools/dev-server.mjs's /api/thumb — never a mock-up, so the card cannot
+           quietly start lying about what the build looks like. -->
+      <a class="card hero" href="loops/factory-rt/">
+        <!-- Not loading="lazy": this is the first thing on the page, so deferring it only
+             buys a flash of empty card. width/height are set so the layout doesn't jump. -->
+        <img class="thumb" src="assets/thumbs/dripping-pickle.jpg" alt=""
+             width="640" height="400">
+        <div class="body">
+          <div class="name">The Dripping Pickle</div>
+          <div class="desc">The factory interior, lit in real time.</div>
+          <span class="tag">Main scene</span>
+        </div>
+      </a>
 
-    <a class="card" href="loops/cat-test/?wander=1">
-      <div class="name">The Cat</div>
-      <div class="desc">43 animation clips and six coats, wandering on his own. He is steered
-      rather than following a path — so he arcs round like a cat instead of turning on the spot.</div>
-      <span class="tag">Character test</span>
-    </a>
+      <a class="card" href="loops/cat-sequencer/">
+        <div class="name">Cat Sequencer</div>
+        <div class="desc">43 clips and six coats, steered rather than pathed.</div>
+        <span class="tag">Character test</span>
+      </a>
+    </div>
+  </section>
 
-    <a class="card" href="loops/dust-and-light/">
-      <div class="name">Dust and Light</div>
-      <div class="desc">Look test. Light shafts, drifting dust, baked-feel shadows — atmosphere only, no custom models yet.</div>
-      <span class="tag">Look test</span>
-    </a>
+  <section data-project="pirate-beach">
+    <div class="shead">
+      <h2>Pirate Beach</h2>
+      <span class="state">Planned</span>
+    </div>
+    <div class="grid">
+      <div class="card soon">
+        <div class="name">Pirate Beach</div>
+        <div class="desc">Not started.</div>
+        <span class="tag soon">Planned</span>
+      </div>
+    </div>
+  </section>
 
-    <a class="card" href="loops/factory-rt/">
-      <div class="name">Factory — real-time lighting</div>
-      <div class="desc">The whole factory lit live, with no bake in Blender. Bounce light comes
-      from a grid of 924 probes measured inside the building itself, and shadows sharpen where
-      objects touch the floor and soften with distance. Move the sun and the room follows.</div>
-      <span class="tag">Real-time GI</span>
-    </a>
-  </div>
+  <section data-project="food-truck">
+    <div class="shead">
+      <h2>Food Truck</h2>
+      <span class="state">Planned</span>
+    </div>
+    <div class="grid">
+      <div class="card soon">
+        <div class="name">Food Truck</div>
+        <div class="desc">Not started.</div>
+        <span class="tag soon">Planned</span>
+      </div>
+    </div>
+  </section>
 
-  <p class="foot"><a href="feedback/">Feedback tracker</a> — every note left on a loop and
-  whether it has been dealt with. Read-only here; run the dev server to tick things off.</p>
+  <p class="foot"><a href="feedback/">All notes</a> — every note across every Loop, if you
+  want them in one place. Read-only here; run the dev server to tick things off.</p>
+
+<script type="module">
+  // Stamp each Loop's header with its own open count. The mapping from a Loop to the scenes
+  // it owns lives in loops.json and NOWHERE else — a note's `loop` field holds a scene id
+  // (factory-rt, cat-sequencer), so the gallery and the tracker would otherwise each need their
+  // own copy of that grouping and would drift the first time a scene was added.
+  try {
+    const [slate, notes] = await Promise.all([
+      fetch('loops.json',          { cache: 'no-store' }).then((r) => r.json()),
+      fetch('feedback/notes.json', { cache: 'no-store' }).then((r) => r.json()),
+    ]);
+    for (const p of slate.projects) {
+      const link = document.querySelector(`section[data-project="${p.id}"] .notes`);
+      if (!link) continue;                       // a Loop with nothing to track yet
+      const mine = notes.filter((n) => p.scenes.includes(n.loop));
+      const open = mine.filter((n) => n.status !== 'closed').length;
+      link.textContent = open ? `${open} open · ${mine.length} notes` : `no open notes`;
+      link.classList.toggle('hot', open > 0);
+    }
+  } catch {
+    // Opened over file://, or notes.json missing. The header keeps its plain "notes" link,
+    // which still works — only the count is unavailable.
+  }
+</script>
 </body>
 </html>

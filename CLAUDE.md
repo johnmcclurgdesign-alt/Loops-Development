@@ -20,6 +20,26 @@ assets/<name>/          .glb files and textures for that loop
 
 One folder per loop. Each loop is self-contained so one breaking never breaks another.
 
+### ★ There are TWO loops. Both are live.
+
+| loop | what it is |
+|---|---|
+| `loops/factory-rt/` | **the factory.** Live GI, raymarched shafts, `?mode=baked` for the bake. |
+| `loops/cat-sequencer/` | the cat's workshop. Was `loops/cat-test/` until 2026-08-17. |
+
+**`loops/factory/` and `loops/dust-and-light/` were DELETED on 2026-08-17** — both were the old
+card-shaft generation, superseded by the raymarched pass in `tools/volumetrics.js`. If you find a
+reference to either, it is stale; fix it rather than recreating the folder. **The tell is
+card-based volumetrics: a scene that builds light shafts out of quads is from before that line.**
+`grep -rc "shaftMat\|shaftPlanes" loops/` must read **0** everywhere.
+
+Nothing was lost by deleting them. `factory-rt` already renders the Blender bake under
+`?mode=baked` and loads the same `assets/factory/lightmap_4k.hdr`, so the whole lightmap section
+below still applies — and `git show 8a17175:loops/factory/index.html` has the old file if the card
+implementation is ever wanted. The 16 feedback notes were re-pointed at `factory-rt` first; the 8
+that were originally taken in the baked loop carry `origin_loop` so their screenshots aren't
+mistaken for the real-time look.
+
 ## Stack
 
 - **Three.js** from a CDN via importmap — no build step, no `node_modules`, no bundler.
@@ -119,7 +139,7 @@ driven by `unreal.AssetExportTask`.
 
 ## Steering the cat — Yuka
 
-`loops/cat-test/` drives him with [Yuka](https://github.com/Mugen87/yuka) 0.7.8 off jsDelivr,
+`loops/cat-sequencer/` drives him with [Yuka](https://github.com/Mugen87/yuka) 0.7.8 off jsDelivr,
 straight into the importmap — MIT, zero dependencies, no build step. Yuka decides **where he
 goes**; the `AnimationMixer` decides **how his legs move**. The only thing crossing between them
 is travel speed → clip playback rate.
@@ -195,6 +215,67 @@ there is no way to eyeball this without the grid.
 it off three does. A recentre (or any teleport) that writes only one of them looks fine until the
 mode is toggled, at which point he snaps back to where he was.
 
+## Walking him around a real room — `tools/cat-walk.js`
+
+The cat-sequencer steering with the circular leash taken out and wall avoidance put in.
+Everything in **Steering the cat — Yuka** above still applies and is repeated in the module,
+because those failure modes are all silent. What is new here:
+
+- **★ IT IS A GRID, NOT RAYCAST WHISKERS, AND THAT IS NOT AN OPTIMISATION — IT IS THE ONLY
+  WAY IT FITS.** three's `Raycaster` is linear in triangles with no BVH and this building is
+  428k of them, so a seven-whisker fan is ~3M triangle tests *per frame*. The room is measured
+  once into a coarse walkability grid (0.3 m cells, 4,422 of them) and the whiskers become
+  array lookups. Frame cost with steering and the mixer running: **4.22 ms**.
+- A cell is blocked if a mesh's bounding box overlaps it in XZ **and** overlaps the cat's own
+  height band in Y (`floorY + 0.06` to `+0.55`). The band is what makes the floor walkable and
+  the roof irrelevant without naming either. Boxes are coarse on purpose — he keeps clear of
+  things rather than clipping them.
+- **★ THE LOOKAHEAD MUST EXCEED THE TURNING CIRCLE OR AVOIDANCE IS IMPOSSIBLE BY CONSTRUCTION.**
+  He cannot turn tighter than the arc radius, so a wall seen closer than that is already a
+  collision. Derived from the radius (2.5×), never typed.
+- **★ "INSIDE THE BOUNDING BOX" IS NOT "INSIDE THE ROOM" — THE DOORWAY IS THE DIFFERENCE.**
+  The grid spans the whole bbox, so the ground *outside* the walls is unblocked too. He walked
+  out through the door, and once past the bbox every cell reads blocked, so the fan had no
+  clear heading to offer and he just kept going: **650 m away after twenty minutes**. Fixed by
+  flood-filling from his start cell and marking everything unreachable as wall — 4,422 cells
+  down to 1,375 reachable. That closes the doorway, the outside, and any leak nobody has found.
+  **A five-minute test passes this; it took twenty to fail.**
+- **"Clear ahead" is not "not scraping a wall".** Travelling *parallel* to a wall reads as
+  fully clear at every lookahead, so nothing objects while wander curves him back into it —
+  measured two ~17 s episodes inside 0.3 m of a wall. A short probe ring and a gentle nudge
+  away fixes it: **30.7% → 0.1%** of time within 30 cm.
+- **An unsigned avoidance fan always breaks ties to the same side**, and in a corner that is a
+  stable orbit. Ask which way round is more open first, then try that side at each deviation.
+- **The rate limit applies to the safety net too.** The escape recovery originally assigned the
+  heading outright, which is a pivot: one **1040°/s** frame per simulated hour. One visible snap
+  an hour is one too many in a loop that plays forever.
+- **★ FOOT SLIDE IS ONE NUMBER AND YOU CAN MEASURE IT INSTEAD OF EYEBALLING IT.** `stride` is
+  the travel speed the walk clip was authored for; rate is `travel / stride`. It had been
+  ASSUMED equal to the travel speed, which makes the rate exactly 1.0 and looks deliberate.
+  **Freeze the body at the origin and step the clip**: a claw's world position is then its
+  position relative to the cat, and a planted paw must sweep backward at exactly the travel
+  speed. Stance is the bottom 15% of the claw's vertical travel — no threshold picked by eye.
+  Measured here: **0.472 m/s**, not 0.45, all four claws inside 0.471–0.473. `measureAuthoredSpeed()`
+  runs it at load so a re-export cannot leave a stale number behind. Result: overall stance
+  slide **6.3% → 3.2%** of travel speed, and in a straight line **1.3%**.
+- **★ AND THE SAME `matrixAutoUpdate` TRAP AS `setRenderComponent` BITES THE MEASUREMENT.**
+  Freezing the body means writing `matrix` — but with `matrixAutoUpdate` still on,
+  `updateMatrixWorld` recomposes it from position/quaternion on the next line and the identity
+  is gone. The claws then get measured in WORLD space, so the cat's yaw rotates the sweep out
+  of Z and the answer comes back short by `cos(yaw)`: **0.197 against a true 0.472** at 125°.
+  It is a plausible-looking number, it sets the clip rate to 2.29, and it gives you **more**
+  slide than you started with.
+- **What is left is CORNERING, not the clip.** The walk clip has no turn in it — the body yaws
+  underneath a straight-line cycle, so a planted paw has to scrub. Bucketed by turn rate:
+  straight **1.3%**, gentle 3.8%, hard (>25°/s) **19.5%**. The lever is the arc radius, and it
+  is an art-direction trade, not a bug fix — median slide / worst-case p90 / max turn rate:
+  **0.55 → 3.8% / 0.145 / 46.9°/s**, 0.8 → 2.7% / 0.114 / 32.2, 1.1 → 2.4% / 0.085 / 23.4,
+  1.5 → 2.1% / 0.069 / 17.2. All four keep him out of the walls. Fixing it properly needs
+  additive turn poses or IK, not a dial.
+- **Measure it over an hour, not a minute.** Final run, 1 h simulated: 0 frames inside a wall,
+  peak turn rate 46.9°/s against a 46.9 cap, **0 pivot frames**, speed constant at 0.45, 459
+  half-metre cells visited, 0 loiters over 10 s.
+
 ## What carries the look
 
 In this order — atmosphere first, geometry last:
@@ -202,11 +283,13 @@ In this order — atmosphere first, geometry last:
 1. **ACES tone mapping** (`renderer.toneMapping`) — biggest single quality jump.
 2. **Fog** (`FogExp2`) — depth, and it hides the edge of the world.
 3. **Bloom** — makes light sources read as light instead of bright paint.
-4. **Light shafts** — crossed additive planes with a gradient shader. Fake, convincing.
+4. **Light shafts** — raymarched against the sun's shadow map (`tools/volumetrics.js`). They used
+   to be crossed additive planes; that generation is gone, and so is the loop that demoed it.
 5. **Dust motes** — `Points` with a soft radial sprite. Never leave them square.
 6. **Vignette + film grain** — stops the image reading as "computer graphics".
 
-See `loops/dust-and-light/index.html` — it is the reference implementation for all six.
+`loops/factory-rt/index.html` is the reference implementation for all six now — `dust-and-light`,
+which used to be, was deleted with the card shafts on 2026-08-17.
 
 ## Canvas UI registry
 
@@ -398,7 +481,7 @@ material. Compare `.name` instead. This one masquerades as the active-and-select
   back. Record links AND constants, export, restore, all in one call, then assert zero failed
   restores. (Blender's undo did recover it once, and left the lightmap UVs intact, but don't rely
   on that.)
-- No Draco or Meshopt: `loops/factory/index.html` uses a bare `GLTFLoader` with no decoder
+- No Draco or Meshopt: `loops/factory-rt/index.html` uses a bare `GLTFLoader` with no decoder
   configured, so compressed geometry would fail to load.
 
 ## glTF carries ONE base-colour texture per material
@@ -455,6 +538,18 @@ node tools/dev-server.mjs 5173
 
 - `?dev=1` — writes notes into `feedback/notes.json` (+ `feedback/shots/`). Read
   that file at the start of a session; anything with `"status": "open"` is waiting.
+- **The tracker's Delete is for a note that should never have been filed** (a duplicate, a test,
+  one against a deleted loop). "Mark done" is for one that was dealt with — delete keeps no
+  resolution. Two clicks: the first arms the button for 4 seconds, because it sits next to
+  "Mark done" and only one of the two is reversible from the UI. The record moves to
+  `feedback/deleted.json` rather than being dropped, and the `.jpg` is left in `feedback/shots/`
+  with the tombstone still pointing at it — a screenshot and a camera can't be reconstructed.
+- **★ NEW IDS CAME FROM `notes.length + 1`, WHICH A DELETE BREAKS SILENTLY.** That only holds
+  while notes are append-only. Measured: with 16 notes on file and `n017` live, the old scheme
+  issued **`n017` again** — the new note would have overwritten `feedback/shots/n017.jpg`,
+  keeping its own text and gaining someone else's picture. `nextId()` now takes the highest id
+  ever issued, **tombstones included**, so a retired id is never reused while its `.jpg` exists.
+  Any future "compact the notes file" idea has to respect the same rule.
 - `?review=1` — same panel for the team on GitHub Pages. There's no server there,
   so **send** becomes **copy note**: it puts the note plus a deep link on the
   clipboard to paste wherever the team keeps its notes.
@@ -532,13 +627,40 @@ trap that once cost an hour of debugging a scene that had already been re-export
 
 ## Fly camera — `tools/flycam.js`
 
-WASD/QE movement layered **on top of** OrbitControls; drag still orbits, wheel still dollies.
-`createFlyCam({ camera, controls })`, then `fly.update(dt)` in the animation loop, before
-`controls.update()`. Wired into all three loops and exposed as `window.__fly`.
-W/S forward-back along the true view axis, A/D strafe, Q/E down/up, Shift ×4, Alt ×0.25.
+Unreal's level-viewport navigation, layered **on top of** OrbitControls; with no button held,
+drag still orbits and the wheel still dollies. `createFlyCam({ camera, controls })`, then
+`fly.update(dt)` in the animation loop, before `controls.update()`. Wired into all four loops
+and exposed as `window.__fly`.
 
-Four things it has to keep doing, each of which fails silently if broken:
+**Hold RIGHT MOUSE, then:** mouse looks, W/S forward-back along the true view axis, A/D strafe,
+Q/E down/up along world up, wheel changes camera speed. Shift ×4 / Alt ×0.25 are ours, not UE's —
+the engine has no boost modifier and expects the wheel to be used.
 
+- **★ WASD IS NOT A CAMERA CONTROL UNTIL THE RIGHT BUTTON IS HELD.** That gate is the whole of UE's
+  model, and it is what lets the keys stay free for everything else. Keys are still *recorded* when
+  not flying, so grabbing the mouse with W already down moves — the engine polls key state rather
+  than latching it on press.
+- **★ REGISTER THE RIGHT-BUTTON LISTENERS AT WINDOW CAPTURE, NOT ON THE CANVAS.** At the target
+  element, listeners fire in **registration order regardless of the capture flag**, and every loop
+  constructs OrbitControls first — so a canvas-level listener runs second, after OrbitControls has
+  captured the pointer and started a right-button PAN. Capture at the window, check the target is
+  inside the canvas, `stopPropagation()`. Verified with `controls.state` (-1 NONE / 0 ROTATE /
+  2 PAN) and `controls._pointers.length`: both stay clean through a right-drag now.
+- **★ THE ONE-STEP EULER VERSION OF UE'S DAMPING MAKES TOP SPEED DEPEND ON FRAME RATE.** "Add
+  `speed*damping*dt`, then multiply by `exp(-damping*dt)`" settles at `speed * damping*dt*k/(1-k)`,
+  not at `speed` — measured **5.06 m/s against a dialled 6** at 60 fps, and a different number on a
+  144 Hz machine. Use the exact solution instead (exponential approach to the commanded velocity,
+  displacement from the average velocity over the step): now 6.000 m/s at 20, 60 and 144 fps.
+- **Speed is a ladder, not a number.** Notches that each double the last, default 4 — UE's scheme,
+  anchored to the 6 m/s already fitted to this building rather than to a raw engine constant. The
+  wheel moves it while flying. It needs the on-screen readout: a wheel notch you cannot see reads
+  as a broken wheel, which is why UE puts the number in the viewport toolbar.
+  **The engine offers eight notches; we stop at five (0.75 / 1.5 / 3 / 6 / 12 m/s).** UE's ladder is
+  sized for a level, and this building is 35 m across — notch 8 is 96 m/s, which crosses it in a
+  third of a second, so the top three notches were all "gone". `maxSetting` is the dial.
+- **A LOOK has to re-plant `controls.target` down the new view axis at the same distance.** Rotating
+  the camera alone desyncs OrbitControls, and its `update()` ends with `lookAt(target)` — so on the
+  very next frame it snaps your rotation back. Re-anchoring makes that `lookAt` a no-op instead.
 - **Translate `camera.position` AND `controls.target` by the same vector.** OrbitControls derives
   its spherical from `position - target`, so moving only the camera makes it snap back the moment
   the user drags. Keeping the offset constant also means you carry on orbiting whatever you flew to.
@@ -550,9 +672,16 @@ Four things it has to keep doing, each of which fails silently if broken:
   here because `getElapsedTime()` already consumed the delta internally — the symptom is a fly
   camera that initialises fine and simply never moves.
 
-Uses `e.code` (`KeyW`), not `e.key`, so it stays positional on AZERTY/QWERTZ. Keys are cleared on
-`blur`/`visibilitychange`, or a held key sticks when you alt-tab away mid-press. `dt` is clamped to
-0.1 s so the first frame back from a background tab doesn't teleport the camera.
+Pointer lock is requested only once the drag is real (>3 px), so a stray right-click doesn't flash
+the browser's "press Esc" toast; losing the lock to Esc ends the flight, or we would capture the
+mouse forever. Uses `e.code` (`KeyW`), not `e.key`, so it stays positional on AZERTY/QWERTZ. Keys
+and the button are cleared on `blur`/`visibilitychange`, or a held key sticks when you alt-tab away
+mid-press. `dt` is clamped to 0.1 s so the first frame back from a background tab doesn't teleport
+the camera. `fly.camera` / `fly.controls` are exposed because ramp, top speed and the target
+re-anchor are not things you can eyeball.
+
+The feedback panel's click-to-select is **left button only** for this — a right-click that happens
+not to move would otherwise re-pick whatever is under the cursor.
 
 ## Stylised looks
 
@@ -579,6 +708,19 @@ The two worth knowing: **Luminosity** takes the style's light and keeps the scen
 is 8.0 in linear HDR and Overlay of 8.0 is meaningless, so both sides are tone-mapped, blended,
 and converted back through `toLinear()`. That is why the modes behave the way they do in
 Photoshop instead of tearing in the highlights.
+
+**★ `new WebGLRenderer({ antialias: true })` DOES NOTHING ONCE THERE IS A COMPOSER, AND
+NOTHING WARNS.** That flag asks for MSAA on the **default framebuffer** — the canvas — but a
+composer renders into its own targets and only the last pass touches the canvas, by which
+point the geometry is already resolved pixels. `EffectComposer` builds its targets with
+`samples: 0`, so `factory-rt` shipped with **no anti-aliasing at all** while its renderer
+politely asked for some. Check it, don't assume: `composer.renderTarget1.samples`.
+Fixed where the target is made (`createLooks({ msaa: 4 })`, `?msaa=0` to A/B) rather than by
+bolting on FXAA/SMAA — hardware multisampling fixes the EDGES without softening the texture
+detail a post-process AA smears. Measured 4× against 0: hard one-pixel steps across the frame
+down **9.7%**, and the cat's back and ears go from stair-steps to clean. Costs **+0.8 ms**
+(3.78 → 4.58). Note `loops/cat-sequencer/` renders straight to the canvas, so its `antialias`
+is real and it needs none of this — the trap only exists where a composer does.
 
 **Where the passes sit, and why it is not negotiable.** `RenderPass → [style] → OutputPass`.
 three only tone-maps when it renders straight to the canvas — `if (currentRenderTarget ===
@@ -632,6 +774,26 @@ matched exactly. The real fix is adding `#include <tonemapping_fragment>` and
 is an art-direction change, so it has been left alone. Pull the Exposure slider down to
 compensate in the meantime.
 
+**★ A DIAL THAT PASSES NO `step` USED TO GET THE STRING "undefined", AND THE BROWSER SILENTLY
+FALLS BACK TO A STEP OF 1.** So every *uncurved* dial was quantised to whole numbers: a 0–1.5
+dial had two positions, and a 0–0.6 dial had **one**, sitting at 0 while its readout said 0.20.
+It reads as the scene ignoring the control, not as the control being broken. Curved dials set
+their own 0.002 step and were always fine, which is why this hid until a dial whose whole range
+was under 1 turned up. `looks.js` now defaults to `(max - min) / 500`. **Verify a new dial by
+driving the slider and reading the target back**, never by looking at the readout — the readout
+was right the whole time.
+
+**★ `PMREMGenerator.fromScene` DEFAULTS TO `far = 100`, AND THIS SKY DOME HAS A RADIUS OF 400.**
+The cube camera rendered an empty scene, so `scene.environment` was **pure black** — mean value
+0.0000 — and the Sky IBL dial was multiplying zero. Nothing errors and nothing warns; sweeping
+the dial from 0 to 10 (fifty times the shipped value) moved the brightest pixel in the frame by
+**2/255**. Prove which half is broken by swapping in a known-bright environment: white through
+the same code path moved pixels by **233**, so the plumbing was never the problem. Note the
+knock-on — `envi` 0.195 had been "fitted" against zero, and with the map actually rendering the
+same number is **+11.6%** on the frame (loop camera 90.7 → 101.2), so it was re-defaulted to
+0.02 rather than silently re-grading the room. **Move it far and the GI wants a re-bake**, since
+the probes see whatever the environment is lighting the room with.
+
 `window.__looks` exposes the api for scripted checks — thirteen fragment shaders is too many
 to eyeball, and a shader that fails to compile renders black rather than throwing.
 
@@ -668,6 +830,20 @@ after `<project_vertex>`, so it reads the SKINNED position and works on a Skinne
   skylight's bounding box is 3.2 m tall despite being a flat pane, so `size.y < min(size.x,
   size.z)` rejects it. Classify by HEIGHT instead: roof centres sit at 5.6 m, the arched wall
   windows at 0.2 m.
+- **★ A RECT LIGHT BUILT FROM A PITCHED PANE'S BOUNDING BOX DRAWS A HARD STRAIGHT LINE ACROSS
+  THE ROOM (n017).** A `RectAreaLight` is single-sided: everything behind its plane gets
+  exactly zero, no falloff. The glazing is a sawtooth at 57°, so a flat 10.36 × 3.82 m pane
+  boxes to 3.21 m tall — and placing the light at that box's centre, aimed straight down, put
+  the cut-off on the HORIZONTAL plane y = 5.59, which is 1.6 m below the top of an aperture
+  spanning 3.98–7.19 m. Every roof surface above it went unlit and the pitched roof crossing
+  that plane drew a dead straight edge over beams, glass and brickwork. `size.z` was wrong
+  too: 2.07 m is the slope's horizontal PROJECTION, not its 3.82 m length. `planeOf()` reads
+  the pane's own plane out of the mesh (inward normal + extents along the plane's two axes),
+  which is exactly what `width`/`height`/`lookAt` want. **Diagnose it by differencing the
+  frame with the light on against off** — the contribution stepping 0 → 238 across one row
+  names the plane immediately, and rules out the sun, the GI and the shafts in one shot (all
+  three were toggled first here and none of them moved the line). Note the fix is brightness-
+  neutral at the loop camera, 83.3 → 82.7: 1.85× the area, cancelled by the 57° cosine.
 - **★ THE BAKE RE-RENDERS THE SHADOW MAP ONCE PER PROBE FACE UNLESS YOU STOP IT.** A probe is
   six `renderer.render()` calls and each one rebuilds a 4096² shadow map over the whole
   building. At 924 probes × 2 bounces that is 11,000 shadow passes for an answer that never
@@ -696,6 +872,84 @@ after `<project_vertex>`, so it reads the SKINNED position and works on a Skinne
 - **Acne under PCSS shows up as RAINBOW BANDING on fine geometry** (the radiator fins), not
   as the usual stripes, because the filter disc widens with blocker distance. `normalBias`
   is the control; it is in world units. Current pair: 2 mm depth bias, 6 mm normal bias.
+- **★ A GRID THAT SPANS ITS BOUNDS EXACTLY CANNOT BE READ WITH A PLAIN `texture()` CALL — THIS
+  WAS n018, "the corners glow and the middle is dark".** A sampler maps a normalised coord to
+  texel index `u*D - 0.5`, but `gi-volume.js` puts probe `i` at `min + i*step` with
+  `step = size/(D-1)`, so the correct index is `u*(D-1)`. The two agree **only at the exact
+  centre probe**: at D=11 the error grows to half a probe — **1.1 m** — toward the edges. The
+  volume was being read in the wrong place everywhere except the middle of the room. Fixing it
+  moved wall corner/mid from 1.24 to 0.94 on its own. If you ever add another `Data3DTexture`
+  grid here, decide up front whether probes sit ON the bounds or half a cell inside, and note
+  that only the "half a cell inside" convention can use hardware filtering directly.
+- **★ AND RE-BAKE AFTER TOUCHING THE SAMPLER.** Bounce pass 1 reads the volume *through this
+  shader*, so a sampling bug is baked into the second bounce and survives the fix. Re-baking
+  took floor edge/mid from 1.26 to 0.97 — bigger than the shader change that preceded it.
+- **A hardware trilinear fetch cannot ask whether a probe can SEE the surface**, so a wall near
+  a corner takes a quarter of its light from probes behind the perpendicular wall. Real corners
+  are darker, so the error is *inverted*, not just wrong. `giVolume()` now gathers the eight
+  neighbours with `texelFetch` and weights each by a wrapped cosine of the normal against the
+  direction to that probe. **Be honest about what this buys: it is the smaller half** (wall
+  0.924 → 0.878 on top of the alignment fix). It costs 32 texture reads against 4 and measures
+  as *nothing* — 4.49/3.96 ms against 4.56/4.69 ms over 40 frames, because an 11×7×12 texture
+  is entirely cache-resident. `givis` 0 reproduces the old sampler for an A/B.
+- **★ THE BRIGHT BAND ALONG EVERY WALL/FLOOR JUNCTION IS ONE PROBE STANDING BEHIND THE WALL,
+  AND NO NORMAL-BASED WEIGHT CAN REFUSE IT.** A floor point 15 cm from the wall at z = −4.052
+  took **55%** of its bounce from the probe at z = −4.59 — half a metre behind that wall, in
+  daylight, 3.4× brighter than the probe in the room. It is *sideways* from the floor, so the
+  wrapped cosine barely disfavours it: sharpening exponent 2 → 16 moved the glow **2.50 → 2.43**.
+  **Two obvious probe tests also miss it** — zeroing the 34 probes inside solid geometry changed
+  nothing, and zeroing all 474 probes outside the building moved it 1.739 → 1.698. It is in open
+  air, in the gap between the inner face and the outer envelope, on the wrong side of a wall.
+  **The question that separates it is "how much open sky can this probe see?"** — 16 rays, count
+  the misses. It works *because the glazing is geometry*: a ray leaving an indoor probe through a
+  skylight still stops at the pane, so indoor probes score a clean **0.00**, the offender 0.31,
+  fully outdoors 0.77–0.81. Stored in coefficient 0's alpha, which was already allocated and
+  unused, so the file does not grow. Threshold 0.2 — and it is a **plateau**, not a knife edge:
+  0.1/0.15/0.2/0.3 are byte-identical because the 16-ray score is quantised and nothing lands
+  between 0.0625 and 0.313. At 0.45 the offender is valid again and the glow returns to 3.89,
+  which is the mechanism confirming itself. Junction profile, GI alone: **4.05 → 1.40**.
+  **If glass is ever deleted from the model rather than made non-casting, that 0.00 stops being
+  0.00 and this threshold needs re-checking.**
+- **Bake validity BEFORE the bounce passes**, or bounce 2 is gathered through the leak you are
+  trying to remove — and stop the SH write from clearing coefficient 0's alpha, which it did.
+- **`giNormalBias` at 0.55 of a probe spacing is a symptom, not a setting.** With no visibility
+  test it is the only thing keeping a surface off the probe in its own wall, and there it cannot
+  win — it helps walls and hurts floors in the same move. Measured wall corner/mid against floor
+  edge/mid: **1.45/1.51 at 0.4, 1.24/1.88 at 2.0**. It is 0.33 now, a margin rather than a dial.
+- **Diagnose an "unnatural light" note by isolating each source and measuring a RATIO**, not by
+  looking. Corner-band mean ÷ mid-band mean, where >1.0 means corners glow: GI **1.24/1.88**,
+  skylights 0.95/0.90, sun 0.20/0.19 — that named the culprit in one pass. And rule out inverted
+  AO first, since it looks identical: of 124,967 pixels GTAO touched it darkened all of them and
+  brightened **zero**. At full dials the whole frame read 0.74/0.62, i.e. the sun and skylights
+  were bright enough to bury the defect — which is why it only showed up with the dials down.
+- **★ GTAO's `thickness` MUST TRACK ITS `radius`, OR THE AO DIAL DELETES THE AO INSTEAD OF
+  WIDENING IT.** `thickness` is how deep an occluder is assumed to be; a sample more than that
+  behind the surface is read as "I can see past it". Pinned at its default 1 m while `radius`
+  ran 0.1–5, every extra metre of radius threw more samples away. Spread of the AO buffer at
+  the loop camera — **thickness 1: r1.2 60, r2 31, r3.5 15, r5 13** against **thickness =
+  radius: r1.2 64, r2 39, r3.5 53, r5 68**. The "dark stripes past 1.2" were the same failure
+  seen from the other side: differencing the frame at r1.2 against r3.5 shows the creases going
+  **brighter by up to 72** while a broad band beside them darkens — the occlusion migrates off
+  the geometry, and with no contact line anchoring it the leftover bands read as stripes.
+  One occluder-depth per radius gives the soft per-surface vignette that was wanted, and costs
+  nothing (3.56 ms at r1.5 against 3.60 ms at r5). **Diagnose this family on the AO BUFFER, not
+  the composite** — `aoPass.output = GTAOPass.OUTPUT.Denoise`, then contrast-stretch it, because
+  a healthy AO here only spans 180–246 out of 255 and every defect is invisible at that scale.
+- **The floor has its own AO radius and amount — `tools/ao-floor.js`, dials `aofrad`/`aofamt`.**
+  **It is ONE GTAO pass, not two, and that is the whole design.** A second `GTAOPass` re-renders
+  the scene's depth *and* normals before it does any AO work, so it costs a full scene pass to
+  buy two numbers. Instead the shipped shader is patched so the radius and thickness are chosen
+  per fragment: three's GTAOShader already has the view normal in hand on the line above where
+  it sets `radiusToUse`, and already carries `cameraWorldMatrix`. Measured 3.49 ms with the
+  split inert against 3.89 ms with it wide open — inside the noise. **"Floor" is the world
+  normal pointing up, not a list of objects**, so table tops and the tops of crates go with it;
+  the crossfade band is a dial (`upMin`/`upMax`) so a ramp does not draw a line across itself.
+  Verify a change to it by zeroing one amount at a time and painting the difference — the floor
+  dial must move 5.4% of the frame and the wall dial 37.5%, with no overlap. Note **`thickness`
+  is read in four places** in that shader, not just the falloff line; patch one and the floor
+  marches with one depth budget and rejects with another. Pinned-version territory like
+  `pcss.js`: it matches r169 by exact string and **throws** on a miss, because an AO split that
+  silently does nothing is indistinguishable from one whose dials you have not found yet.
 - **★ `shadow.bias` IS IN NORMALISED DEPTH, SO ITS REAL SIZE DEPENDS ON THE SHADOW CAMERA —
   THIS IS THE "SUN THROUGH THE WALLS" LIGHT LEAK.** It is a units bug, not a precision one.
   `-0.0006` across the old 33 m shadow box was 2 cm; fitting the box to the whole building
@@ -713,6 +967,30 @@ after `<project_vertex>`, so it reads the SKINNED position and works on a Skinne
 - **Patching a three ShaderChunk is pinned-version territory.** `pcss.js` matches `getShadow`
   in r169 by exact string and THROWS if it does not match, because a silent miss looks exactly
   like "PCSS is on and does nothing".
+**Light shafts are RAYMARCHED now (`tools/volumetrics.js`), not cards.** A full-screen pass
+walks each pixel's ray to the depth buffer, looks every step up in the SUN'S shadow map, and
+sums the lit ones — the same question a shadow answers, asked about the air. The cards remain
+behind the **Shafts** dropdown as a cheap fallback, but nothing below this line applies to the
+default path any more; it is kept because the card traps are generic to billboard volumetrics.
+
+- **Everything in the card list below is a property of the card being a card.** Raymarching
+  has no silhouette to see, is shaped by the real glazing bars for free (they are already in
+  the shadow map), is occluded by geometry for free (the march stops at the depth buffer),
+  and adds in LINEAR HDR inside the composer rather than writing display-referred colour
+  that gets tone-mapped twice.
+- **★ FIT THE DENSITY, DO NOT GUESS IT.** The Henyey-Greenstein phase function is normalised
+  to integrate to 1 over the sphere, so its value at any one angle is ~0.02. A "density" of
+  0.02 therefore renders **nothing at all**, which reads as a broken pass rather than a dark
+  one. Measured frame means at a fixed camera: **0.02 → 68.7 (invisible), 0.12 → beams read,
+  0.3 → the room is fog, 0.5+ → white.** Default 0.08.
+- **A composer pass is not an Object3D**, so the Volumetrics toggle cannot hide it — its list
+  sets `.visible`. Both the pass and the cards go in via small proxies with a `visible`
+  setter that also checks the current mode, or switching the toggle back on hands you BOTH
+  implementations at once. Nine states verified.
+- **The march start must be dithered per pixel** or the steps line up across the screen and
+  you get banding instead of a beam. Half-resolution plus a blur is the lever if it costs
+  too much; it runs full-res today.
+
 - **★ A LIGHT SHAFT IS A QUAD, AND YOU CAN SEE ITS EDGES — THAT IS THE "SHAFT SHADOWING THE
   NEXT SHAFT" BUG (n011).** Where the quad passes through the floor it is sliced along a
   dead straight line; where it ends against the haze of the neighbouring beam that step
@@ -778,8 +1056,14 @@ Deep shadow more than halves, and it does it with DIRECTION — the far bay has 
 all and is lit entirely by bounce arriving through the arched windows.
 
 **Still open:** the shafts and dust are still fitted to the old single-room export and want
-re-doing against two skylights (gain dropped 0.095 → 0.04 as a stopgap). And the volume has
-no probe-validity pass, so it leans on normal bias alone.
+re-doing against two skylights (gain dropped 0.095 → 0.04 as a stopgap). The volume now weights probes
+both by visibility and by whether they stand in the room, which took the wall junction from 4.05
+to 1.40 — but **1.40 is not 1.0**. The residue is what a band-1 SH volume on a 2.2 m grid cannot
+represent: there is still no per-probe DEPTH, so nothing asks whether geometry sits *between* a
+probe and the surface. That is the real remaining lever, and it is the DDGI Chebyshev test.
+Note the `.uasset`-style trap here — the cache is versioned (`ver: 2`), so **bump
+`FORMAT_VERSION` in `gi-volume.js` whenever a channel changes meaning**, or an old
+`gi_volume.bin` loads silently as "every probe is outside the room" and the scene renders black.
 
 ## Working rules
 

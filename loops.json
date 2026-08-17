@@ -1,0 +1,30 @@
+{
+  "_readme": [
+    "The slate. One entry per Loop — a Loop is the show, and it can own several scenes.",
+    "`scenes` holds SCENE ids, which are the folder names under loops/ and are exactly what",
+    "a note writes into its `loop` field. That indirection is the whole point: The Dripping",
+    "Pickle owns both factory-rt and cat-sequencer, so its tracker gathers notes from both.",
+    "The gallery and the feedback tracker BOTH read this file, so the grouping is stated once.",
+    "Adding a Loop: add an entry here, and a <section data-project=\"<id>\"> to index.html."
+  ],
+  "projects": [
+    {
+      "id": "dripping-pickle",
+      "name": "The Dripping Pickle",
+      "status": "live",
+      "scenes": ["factory-rt", "cat-sequencer"]
+    },
+    {
+      "id": "pirate-beach",
+      "name": "Pirate Beach",
+      "status": "planned",
+      "scenes": []
+    },
+    {
+      "id": "food-truck",
+      "name": "Food Truck",
+      "status": "planned",
+      "scenes": []
+    }
+  ]
+}

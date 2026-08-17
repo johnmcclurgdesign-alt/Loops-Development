@@ -879,10 +879,15 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
 
   // Distinguish a click from an orbit drag, otherwise every camera move
   // re-selects whatever happens to be under the cursor.
+  // Left button only: the right button is the fly camera's, and a tap of it that
+  // happens not to move would otherwise re-pick whatever is under the cursor.
   let down = null;
-  renderer.domElement.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) { down = null; return; }
+    down = { x: e.clientX, y: e.clientY };
+  });
   renderer.domElement.addEventListener('pointerup', (e) => {
-    if (!down) return;
+    if (!down || e.button !== 0) return;
     const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
     down = null;
     if (moved > 4) return;

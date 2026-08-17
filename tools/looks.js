@@ -706,12 +706,29 @@ export const LOOKS = [
  */
 export function createLooks({ renderer, scene, camera, getCamera, initial = 'original', menu = true,
                               volumetrics = [], volumetricsOn = true, dials = [], choices = [],
-                              extraPasses = [] } = {}) {
+                              extraPasses = [], msaa = 4 } = {}) {
   // A scene can swap its camera after load (the factory adopts the glTF's own camera), so
   // the live one is fetched per frame rather than captured once into the RenderPass.
   const cameraOf = typeof getCamera === 'function' ? getCamera : () => camera;
 
-  const composer = new EffectComposer(renderer);
+  // ★ `new WebGLRenderer({ antialias: true })` DOES NOTHING ONCE THERE IS A COMPOSER, AND
+  // NOTHING WARNS. That flag asks for MSAA on the DEFAULT framebuffer — the canvas — but a
+  // composer renders into its own targets and only the final pass touches the canvas, by
+  // which point the geometry is already resolved pixels. EffectComposer's own targets are
+  // built with `samples: 0`, so every loop here has been running with no anti-aliasing at
+  // all while its renderer politely asked for some.
+  // Fix it where the target is made rather than by adding an FXAA/SMAA pass: this is real
+  // hardware multisampling on the geometry pass, so it fixes the EDGES without touching the
+  // texture detail the way a post-process AA does.
+  const size = renderer.getSize(new THREE.Vector2());
+  const pr = renderer.getPixelRatio();
+  const gl = renderer.getContext();
+  const samples = Math.min(msaa | 0, gl.getParameter(gl.MAX_SAMPLES) || 0);
+  const composerRT = new THREE.WebGLRenderTarget(
+    Math.max(1, Math.floor(size.width * pr)), Math.max(1, Math.floor(size.height * pr)),
+    { type: THREE.HalfFloatType, samples });
+  composerRT.texture.name = 'EffectComposer.rt1';
+  const composer = new EffectComposer(renderer, composerRT);
   const renderPass = new RenderPass(scene, cameraOf());
   composer.addPass(renderPass);
 
@@ -959,23 +976,15 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
                     set: (v) => { expInput.value = v; expInput.dispatchEvent(new Event('input')); } });
 
     // ---- Atmosphere ---------------------------------------------------------
-    const vol = document.createElement('button');
-    vol.type = 'button';
-    vol.id = 'looks-vol';
-    vol.title = 'Light shafts and dust. Additive, so they react to a look differently from ' +
-                'the rest of the room - switch them off to judge the look alone.';
+    // The Volumetrics on/off BUTTON is gone from the panel — the Shafts dial reaches zero,
+    // so it was a second way to say the same thing sitting next to the dial that says it
+    // better. `?vol=0` still works and `setVolumetrics()` is still on the api, because the
+    // scripted look checks use it to separate "the look is doing that" from "the atmosphere
+    // is doing that", which is the job it was actually added for.
     const dialInputs = [];
     const syncDials = () => dialInputs.forEach(i => { i.disabled = !volsOn; });
-    const paintVol = () => {
-      vol.textContent = volsOn ? 'On' : 'Off';
-      vol.setAttribute('aria-pressed', String(volsOn));
-    };
-    vol.addEventListener('click', () => { setVolumetrics(!volsOn); paintVol(); syncDials(); });
-    paintVol();
-    if (!vols.length) { vol.disabled = true; vol.title = 'This scene has no volumetrics.'; }
-    row(secAtmos, 'Volumetrics', vol);
     controls.push({ key: 'vol', get: () => (volsOn ? '1' : '0'),
-                    set: (v) => { setVolumetrics(v !== '0'); paintVol(); syncDials(); } });
+                    set: (v) => { setVolumetrics(v !== '0'); syncDials(); } });
 
     // Scene-supplied dials. Each look pushes the volumetrics around differently - a
     // halftone screens them into dots, Kuwahara smears them into a haze - so the levels
@@ -992,8 +1001,15 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
         input.min = '0'; input.max = '1'; input.step = '0.002';
         input.value = String(toSlider(d.value));
       } else {
+        // ★ NO DIAL PASSES `step`, SO THIS USED TO WRITE THE STRING "undefined" — WHICH THE
+        // BROWSER REJECTS AND SILENTLY FALLS BACK TO A STEP OF 1. Every uncurved dial was
+        // therefore quantised to whole numbers: a 0-1.5 dial could only be 0 or 1, and a
+        // 0-0.6 dial could only ever be 0, i.e. completely dead. It looked like the scene
+        // ignoring the control rather than the control having two positions. Curved dials
+        // were fine because they set their own 0.002 step, which is why this hid for so long.
         input.min = String(d.min); input.max = String(d.max);
-        input.step = String(d.step); input.value = String(d.value);
+        input.step = String(d.step ?? (d.max - d.min) / 500);
+        input.value = String(d.value);
       }
       const vOut = readout(fmt(d.value));
       input.addEventListener('input', () => {

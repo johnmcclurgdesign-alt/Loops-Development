@@ -16,6 +16,9 @@ const PORT = Number(process.argv[2] ?? 5173);
 const FEEDBACK_DIR = join(ROOT, 'feedback');
 const SHOTS_DIR = join(FEEDBACK_DIR, 'shots');
 const NOTES = join(FEEDBACK_DIR, 'notes.json');
+// Deleted notes are moved here rather than dropped. A note carries a screenshot and a
+// camera that cannot be reconstructed, so a mis-click must be recoverable.
+const DELETED = join(FEEDBACK_DIR, 'deleted.json');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -54,6 +57,24 @@ async function loadNotes() {
   catch { return []; }
 }
 
+async function loadDeleted() {
+  try { return JSON.parse(await readFile(DELETED, 'utf8')); }
+  catch { return []; }
+}
+
+// ★ NOT `notes.length + 1`, which is what this used to be. That only holds while notes are
+// append-only: delete one and the next note reuses a LIVE id, whose screenshot is then
+// overwritten in feedback/shots/ — the note keeps its text and silently gains someone
+// else's picture. Take the highest id ever issued, deleted ones included, so a retired id
+// is never handed out again while its .jpg is still on disk.
+function nextId(...lists) {
+  const max = lists.flat().reduce((m, n) => {
+    const hit = /^n(\d+)$/.exec(n?.id ?? '');
+    return hit ? Math.max(m, Number(hit[1])) : m;
+  }, 0);
+  return 'n' + String(max + 1).padStart(3, '0');
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
@@ -64,7 +85,7 @@ const server = createServer(async (req, res) => {
       await mkdir(SHOTS_DIR, { recursive: true });
 
       const notes = await loadNotes();
-      const id = 'n' + String(notes.length + 1).padStart(3, '0');
+      const id = nextId(notes, await loadDeleted());
       let shot = null;
 
       if (note.screenshot?.startsWith('data:image/')) {
@@ -117,6 +138,75 @@ const server = createServer(async (req, res) => {
       console.log(`  ✓ ${id}  ${note.status}${note.resolution ? '  —  ' + note.resolution.slice(0, 60) : ''}`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, note }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));
+    }
+    return;
+  }
+
+  // Delete a note. "Mark done" is for a note that was dealt with; this is for one that
+  // should never have been filed — a duplicate, a test, a note against a loop that no
+  // longer exists. It is NOT a harder version of closing, so it keeps no resolution.
+  //
+  // The record moves to feedback/deleted.json instead of being dropped: the screenshot and
+  // the camera in a note cannot be reconstructed, and the button sits one row away from
+  // "Mark done". The .jpg in feedback/shots/ is deliberately left where it is — the
+  // tombstone still points at it, so an undelete is a copy back rather than a re-shoot.
+  if (url.pathname === '/api/feedback/delete' && req.method === 'POST') {
+    try {
+      const { id } = JSON.parse((await readBody(req)).toString('utf8'));
+      const notes = await loadNotes();
+      const i = notes.findIndex((n) => n.id === id);
+      if (i < 0) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'no such note: ' + id }));
+        return;
+      }
+      const [gone] = notes.splice(i, 1);
+
+      const tomb = await loadDeleted();
+      tomb.push({ ...gone, deleted_at: new Date().toISOString() });
+      await writeFile(DELETED, JSON.stringify(tomb, null, 2) + '\n', 'utf8');
+      await writeFile(NOTES, JSON.stringify(notes, null, 2) + '\n', 'utf8');
+
+      console.log(`  ✗ ${id}  deleted  —  moved to feedback/deleted.json`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, id, notes }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));
+    }
+    return;
+  }
+
+  // Save a hero thumbnail straight out of a running loop. The gallery card wants a picture of
+  // the scene at its own loop camera, and the only thing that can produce that is the scene
+  // itself — there is no headless renderer here. So the browser captures its canvas and posts
+  // the data URL, and this writes it to assets/thumbs/<id>.jpg.
+  //
+  // Capture note for whoever does the next one: a backgrounded tab never fires
+  // requestAnimationFrame, so its drawing buffer is empty and toDataURL returns a blank
+  // image that looks like a broken canvas. Drive one render by hand (__looks.render()) and
+  // read the canvas in the SAME call. preserveDrawingBuffer must also be on, which it is
+  // whenever the feedback panel is.
+  if (url.pathname === '/api/thumb' && req.method === 'POST') {
+    try {
+      const { id, dataUrl } = JSON.parse((await readBody(req)).toString('utf8'));
+      // The id becomes a filename, so it is not allowed to describe a path.
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(id ?? '')) throw new Error('bad id: ' + id);
+      const [meta, b64] = String(dataUrl ?? '').split(',');
+      if (!/^data:image\/(jpeg|png);base64$/.test(meta ?? '')) throw new Error('expected a jpeg or png data URL');
+
+      const dir = join(ROOT, 'assets', 'thumbs');
+      await mkdir(dir, { recursive: true });
+      const file = `${id}${meta.includes('png') ? '.png' : '.jpg'}`;
+      const bytes = Buffer.from(b64, 'base64');
+      await writeFile(join(dir, file), bytes);
+
+      console.log(`  ▣ assets/thumbs/${file}  ${(bytes.length / 1024).toFixed(0)} KB`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, path: `assets/thumbs/${file}`, bytes: bytes.length }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));

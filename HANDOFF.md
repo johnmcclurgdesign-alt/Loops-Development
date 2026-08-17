@@ -24,7 +24,11 @@ Dev server for this repo:
 ```bash
 cd "C:/Users/dexte/Desktop/Loops Pickle Factory/The Dripping Pickle - 3JS" && node tools/dev-server.mjs 5173
 ```
-→ `http://localhost:5173/loops/factory/index.html?dev=1`
+→ `http://localhost:5173/loops/factory-rt/index.html?dev=1`
+
+(The session logs below predate 2026-08-17 and still use that day's old paths: `loops/factory/`
+and `loops/dust-and-light/` were deleted, and `loops/cat-test/` is now `loops/cat-sequencer/`.
+See CLAUDE.md for the current slate. The logs are left as written.)
 
 ---
 

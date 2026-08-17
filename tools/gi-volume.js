@@ -219,13 +219,23 @@ export function createGIVolume({
     giBoundsMin:  { value: bounds.min.clone() },
     giBoundsSize: { value: size.clone() },
     giHalfTexel:  { value: halfTexel },
+    // The 8-tap gather works in probe INDEX space, so it needs the grid shape and pitch
+    // that used to be implicit in the hardware filter.
+    giDims:       { value: dims.clone() },
+    giStep:       { value: step.clone() },
     giIntensity:  { value: 1.0 },
-    // Push the lookup along the surface normal before sampling. Probes that ended up
-    // inside a wall are black, and a surface sampling its own wall picks them up as a
-    // dark smear; stepping out along the normal reads the probe in the room instead.
-    // This is the single control that decides between light leaking through walls (too
-    // high) and dark rims on every surface (too low). Grid-spacing-relative by default.
-    giNormalBias: { value: Math.max(step.x, step.y, step.z) * 0.55 },
+    // How hard a surface refuses light from probes BEHIND it. 0 reproduces plain
+    // trilinear exactly, which is the honest A/B against the old sampler.
+    giBackWeight: { value: 1.0 },
+    // How much open sky a probe may see before it stops counting as "in the room".
+    // Baked into the alpha of giSH0 as a fraction; 0 disables the test. See bakeValidity().
+    giValidThreshold: { value: 0.2 },
+    // Push the lookup along the surface normal before sampling, so a surface does not read
+    // the probe buried in its own wall. It used to be the ONLY defence against that, which
+    // is why it was 0.55 of a cell — and at that size it is a blunt instrument that trades
+    // the walls against the floor (n018). The per-probe visibility weight below now does
+    // that job properly, so this is back to a small margin rather than a tuning dial.
+    giNormalBias: { value: Math.max(step.x, step.y, step.z) * 0.15 },
   };
 
   // ── material patch ─────────────────────────────────────────────────────────
@@ -256,16 +266,97 @@ export function createGIVolume({
         .replace('#include <common>', `#include <common>
           varying vec3 vGIWorldPos;
           uniform sampler3D giSH0, giSH1, giSH2, giSH3;
-          uniform vec3 giBoundsMin, giBoundsSize, giHalfTexel;
-          uniform float giIntensity, giNormalBias;
+          uniform vec3 giBoundsMin, giBoundsSize, giHalfTexel, giDims, giStep;
+          uniform float giIntensity, giNormalBias, giBackWeight, giValidThreshold;
           ${SH_GLSL}
+          // ★ THE HARDWARE TRILINEAR FETCH CANNOT ASK WHETHER A PROBE CAN SEE THE SURFACE,
+          // AND THAT IS WHY CORNERS USED TO GLOW (n018). A single texture() call blends the
+          // eight surrounding probes by distance alone, so a wall near a corner takes a
+          // quarter of its light from probes on the far side of the perpendicular wall.
+          // Real corners are DARKER because they see less sky, so the error is not just
+          // wrong, it is inverted — and no value of giNormalBias fixes it, because that dial
+          // trades the walls against the floor (measured: wall corner/mid 1.45 -> 1.20 as
+          // the floor edge/mid went 1.51 -> 2.05).
+          // So gather the eight explicitly and weight each one by whether the surface is
+          // facing it. texelFetch, not texture(), because we want the raw probe, not the
+          // filter. Cost is 32 reads per fragment against 4, on textures of 11x7x12.
           vec3 giVolume( vec3 wpos, vec3 wn ) {
-            vec3 uvw = ( wpos + wn * giNormalBias - giBoundsMin ) / giBoundsSize;
-            uvw = clamp( uvw, giHalfTexel, 1.0 - giHalfTexel );
-            vec3 c0 = texture( giSH0, uvw ).rgb;
-            vec3 c1 = texture( giSH1, uvw ).rgb;
-            vec3 c2 = texture( giSH2, uvw ).rgb;
-            vec3 c3 = texture( giSH3, uvw ).rgb;
+            vec3 p = wpos + wn * giNormalBias;
+            // Probe INDEX space: 0 on the first probe, dims-1 on the last. The grid spans
+            // the bounds exactly, so this is a plain scale with no texel-centre fudge.
+            vec3 gp = clamp( ( p - giBoundsMin ) / giBoundsSize, vec3( 0.0 ), vec3( 1.0 ) )
+                    * ( giDims - 1.0 );
+            vec3 base = floor( gp );
+            vec3 frac = gp - base;
+            ivec3 last = ivec3( giDims ) - ivec3( 1 );
+
+            // Two accumulations off the SAME eight fetches: one that trusts every probe,
+            // one that only trusts probes standing in the room. The first is the fallback
+            // for a surface with no valid neighbour at all — better slightly wrong light
+            // than a black patch.
+            vec3 a0 = vec3( 0.0 ), a1 = vec3( 0.0 ), a2 = vec3( 0.0 ), a3 = vec3( 0.0 );
+            vec3 v0 = vec3( 0.0 ), v1 = vec3( 0.0 ), v2 = vec3( 0.0 ), v3 = vec3( 0.0 );
+            float wsum = 0.0, vsum = 0.0;
+
+            for ( int i = 0; i < 8; i++ ) {
+              vec3 off = vec3( float( i & 1 ), float( ( i >> 1 ) & 1 ), float( ( i >> 2 ) & 1 ) );
+              ivec3 idx = clamp( ivec3( base + off ), ivec3( 0 ), last );
+
+              // The trilinear weight this corner would have had on its own.
+              vec3 t = mix( 1.0 - frac, frac, off );
+              float w = t.x * t.y * t.z;
+
+              // Measured from the SURFACE, not from the biased sample point — the bias is
+              // there to escape the wall, and reusing it here would hide the very geometry
+              // relationship we are trying to read.
+              vec3 toProbe = giBoundsMin + vec3( idx ) * giStep - wpos;
+              float len = length( toProbe );
+              float ndl = len > 1e-4 ? dot( wn, toProbe / len ) : 1.0;
+              // WRAPPED, not clamped. A hard clamp drops a whole cell to zero the moment it
+              // crosses the horizon, which puts back the dark rim the normal bias exists to
+              // remove; and the 0.05 floor keeps a fully back-facing cell dim rather than
+              // black, so a surface in a tight corner still has something to interpolate.
+              float wrap = ( ndl + 1.0 ) * 0.5;
+              w *= mix( 1.0, wrap * wrap + 0.05, giBackWeight );
+
+              vec4 s0 = texelFetch( giSH0, idx, 0 );
+              vec3 s1 = texelFetch( giSH1, idx, 0 ).rgb;
+              vec3 s2 = texelFetch( giSH2, idx, 0 ).rgb;
+              vec3 s3 = texelFetch( giSH3, idx, 0 ).rgb;
+
+              // ★ THE NORMAL WEIGHT ABOVE CANNOT REJECT A PROBE THAT IS SIDEWAYS FROM THE
+              // SURFACE, AND THAT IS THE BRIGHT BAND ALONG EVERY WALL/FLOOR JUNCTION. The
+              // probe half a metre BEHIND a wall is at the same height as the floor in front
+              // of it, so the floor's normal barely disfavours it while trilinear still hands
+              // it most of the weight — measured 55% of the light 15 cm from the wall, off a
+              // probe 3.4x brighter than the one in the room. Sharpening the cosine does not
+              // touch it (exponent 2 to 16 moved the glow 2.50 to 2.43).
+              // So the bake asks each probe a different question: how much open sky can you
+              // see? A probe in the room sees none — the glazing is geometry, so even a
+              // skylight ray stops. A probe out past a wall sees most of the hemisphere.
+              // Measured here: in-room probes 0.00, the one behind that wall 0.31, fully
+              // outside 0.77-0.79. That separates cleanly where no normal test could.
+              float valid = giValidThreshold <= 0.0 ? 1.0
+                          : clamp( ( giValidThreshold - s0.a ) / 0.15, 0.0, 1.0 );
+              float wv = w * valid;
+
+              a0 += s0.rgb * w;  a1 += s1 * w;  a2 += s2 * w;  a3 += s3 * w;
+              v0 += s0.rgb * wv; v1 += s1 * wv; v2 += s2 * wv; v3 += s3 * wv;
+              wsum += w; vsum += wv;
+            }
+
+            // Normalising by the weights is what keeps this a brightness-neutral change:
+            // reweighting redistributes where the light comes from, it does not add any.
+            if ( wsum <= 1e-6 ) return vec3( 0.0 );
+            vec3 c0 = a0 / wsum, c1 = a1 / wsum, c2 = a2 / wsum, c3 = a3 / wsum;
+            // Fall back to the unfiltered answer where nothing valid is in reach, and ramp
+            // rather than switch so the changeover cannot show up as a seam.
+            float t = smoothstep( 0.0, 0.02 * wsum, vsum );
+            if ( t > 0.0 ) {
+              float vinv = 1.0 / max( vsum, 1e-6 );
+              c0 = mix( c0, v0 * vinv, t ); c1 = mix( c1, v1 * vinv, t );
+              c2 = mix( c2, v2 * vinv, t ); c3 = mix( c3, v3 * vinv, t );
+            }
             // Band-1 SH can ring negative on the dark side of a strong gradient. Left
             // alone that subtracts light and punches black holes in shadowed geometry.
             return max( giSHIrradiance( wn, c0, c1, c2, c3 ), vec3( 0.0 ) ) * giIntensity;
@@ -282,7 +373,7 @@ export function createGIVolume({
     // same feature set and the volume silently does nothing on some meshes.
     const prevKey = material.customProgramCacheKey;
     material.customProgramCacheKey = function () {
-      return (prevKey ? prevKey.call(this) : '') + '|gi-volume-v1';
+      return (prevKey ? prevKey.call(this) : '') + '|gi-volume-v3';
     };
     material.needsUpdate = true;
   }
@@ -322,6 +413,67 @@ export function createGIVolume({
         Math.abs(v.y - ref.sh.coefficients[c].y),
         Math.abs(v.z - ref.sh.coefficients[c].z)).toFixed(6),
     }));
+  }
+
+  // ── probe validity ─────────────────────────────────────────────────────────
+  // "Is this probe standing in the room?", answered as "how much open sky can it see
+  // directly?". Ray a probe in 16 even directions and count the ones that hit nothing.
+  //
+  // It works because the GLAZING IS GEOMETRY: a ray leaving a probe in the room through a
+  // skylight still hits the pane, so an indoor probe scores a clean 0. Measured on this
+  // building — in-room 0.00, a probe half a metre behind a wall 0.31, fully outdoors
+  // 0.77-0.79. (If glass is ever removed from the model rather than made non-casting, the
+  // indoor score stops being 0 and this threshold wants re-checking.)
+  //
+  // Sixteen rays over 924 probes costs ~10 s, so it is chunked and yielded like the bake.
+  const _fibDirs = Array.from({ length: 16 }, (_, i) => {
+    const y = 1 - (i + 0.5) * 2 / 16;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    const th = Math.PI * (1 + Math.sqrt(5)) * i;
+    return new THREE.Vector3(Math.cos(th) * r, y, Math.sin(th) * r);
+  });
+  const _raycaster = new THREE.Raycaster();
+
+  function visibleAncestors(o) {
+    for (let n = o; n; n = n.parent) if (!n.visible) return false;
+    return true;
+  }
+
+  async function bakeValidity({ onProgress = null, budgetMs = 12 } = {}) {
+    // The sky dome is a ShaderMaterial and so are the light shafts. Include the dome and
+    // NOTHING escapes — every probe scores 0 and the test silently becomes a no-op.
+    const meshes = [];
+    scene.traverse((o) => {
+      if (o.isMesh && visibleAncestors(o)) {
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        if (!mats.some((m) => m && m.isShaderMaterial)) meshes.push(o);
+      }
+    });
+    _raycaster.far = 60;
+
+    const p = new THREE.Vector3();
+    let i = 0, chunkStart = performance.now();
+    for (let iz = 0; iz < dims.z; iz++) {
+      for (let iy = 0; iy < dims.y; iy++) {
+        for (let ix = 0; ix < dims.x; ix++, i++) {
+          probeWorldPos(ix, iy, iz, p);
+          let escaped = 0;
+          for (const d of _fibDirs) {
+            _raycaster.set(p, d);
+            if (!_raycaster.intersectObjects(meshes, false).length) escaped++;
+          }
+          // Alpha of coefficient 0 was already there and unused, so this costs no bytes.
+          data[0][i * 4 + 3] = THREE.DataUtils.toHalfFloat(escaped / _fibDirs.length);
+          if (performance.now() - chunkStart > budgetMs) {
+            if (onProgress) onProgress({ done: i + 1, total: probeCount, phase: 'validity' });
+            await yieldToBrowser();
+            chunkStart = performance.now();
+          }
+        }
+      }
+    }
+    textures[0].needsUpdate = true;
+    return { probes: probeCount };
   }
 
   function probeWorldPos(ix, iy, iz, out) {
@@ -369,6 +521,10 @@ export function createGIVolume({
     const t0 = performance.now();
 
     try {
+      // Validity FIRST, so bounce 2 — which gathers the volume through this same shader —
+      // is itself gathered with the wall-cavity probes already rejected.
+      await bakeValidity({ onProgress, budgetMs });
+
       for (let b = 0; b < bounces; b++) {
         // Pass 0 sees no volume at all, so it captures direct light only. Later passes
         // read the previous pass, which is what turns this into multi-bounce.
@@ -391,7 +547,9 @@ export function createGIVolume({
                 data[c][o + 0] = THREE.DataUtils.toHalfFloat(shOut[c].x);
                 data[c][o + 1] = THREE.DataUtils.toHalfFloat(shOut[c].y);
                 data[c][o + 2] = THREE.DataUtils.toHalfFloat(shOut[c].z);
-                data[c][o + 3] = 0;
+                // NOT coefficient 0's alpha — bakeValidity() lives there and ran first,
+                // so that the second bounce is gathered through the validity test too.
+                if (c > 0) data[c][o + 3] = 0;
               }
 
               if (performance.now() - chunkStart > budgetMs) {
@@ -421,8 +579,13 @@ export function createGIVolume({
   // ── persistence ────────────────────────────────────────────────────────────
   // A published loop should not re-bake on every page load. Bake once with ?gibake=1,
   // save this blob next to the .glb, and ship it.
+  // ver 2 carries probe validity in coefficient 0's alpha. A ver-1 file has zeros there,
+  // which would read as "every probe is outside the room" — so it is rejected rather than
+  // loaded, and the loop re-bakes. Bump this whenever the meaning of a channel changes.
+  const FORMAT_VERSION = 2;
+
   function serialise() {
-    const header = { dims: dims.toArray(), min: bounds.min.toArray(), size: size.toArray(), numSH: NUM_SH };
+    const header = { ver: FORMAT_VERSION, dims: dims.toArray(), min: bounds.min.toArray(), size: size.toArray(), numSH: NUM_SH };
     const json = new TextEncoder().encode(JSON.stringify(header));
     const pad = (4 - (json.length % 4)) % 4;
     const out = new Uint8Array(4 + json.length + pad + NUM_SH * probeCount * 8);
@@ -442,6 +605,10 @@ export function createGIVolume({
     const header = JSON.parse(new TextDecoder().decode(u8.subarray(4, 4 + jsonLen)).replace(/\0+$/, ''));
     if (header.dims.join(',') !== dims.toArray().join(',')) {
       console.warn('[gi] cached volume does not match this grid — re-bake');
+      return false;
+    }
+    if ((header.ver ?? 1) !== FORMAT_VERSION) {
+      console.warn(`[gi] cached volume is format v${header.ver ?? 1}, this build wants v${FORMAT_VERSION} — re-bake`);
       return false;
     }
     let off = 4 + jsonLen;
@@ -464,6 +631,10 @@ export function createGIVolume({
     get baking() { return baking; },
     setIntensity: (v) => { uniforms.giIntensity.value = v; },
     setNormalBias: (v) => { uniforms.giNormalBias.value = v; },
+    // 0 = plain trilinear (the old sampler, for an honest A/B), 1 = full visibility weight.
+    setBackWeight: (v) => { uniforms.giBackWeight.value = v; },
+    // How much sky a probe may see and still count as being in the room. 0 disables.
+    setValidThreshold: (v) => { uniforms.giValidThreshold.value = v; },
     probeWorldPos: (ix, iy, iz) => probeWorldPos(ix, iy, iz, new THREE.Vector3()),
   };
 }

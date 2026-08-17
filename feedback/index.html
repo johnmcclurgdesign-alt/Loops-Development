@@ -9,15 +9,20 @@
     :root {
       --bg: #0b0e14; --panel: #12161f; --line: #1f2532; --line2: #2a3040;
       --ink: #e8eaf0; --soft: #8b93a7; --accent: #c9a227;
-      --open: #6ea8fe; --done: #4ec48a; --warn: #e0a15a;
+      --open: #6ea8fe; --done: #4ec48a; --warn: #e0a15a; --danger: #d2555f;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
-      font: 15px/1.6 -apple-system, "Segoe UI", sans-serif; padding: 5vh 4vw 12vh;
+      /* 72px of top padding, not 5vh: the back button is fixed at top 14px and would sit on
+         the heading in a short window. */
+      font: 15px/1.6 -apple-system, "Segoe UI", sans-serif; padding: 72px 4vw 12vh;
     }
     h1 { font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
          color: var(--soft); font-weight: 500; margin: 0 0 4px; }
+    /* Whose notes these are. A tracker that doesn't name its Loop is one bookmark away from
+       someone closing a note on the wrong project. */
+    h2 { font-size: 20px; font-weight: 600; color: var(--ink); margin: 0 0 8px; }
     .lede { color: var(--soft); max-width: 62ch; margin: 0 0 22px; }
     a { color: var(--open); }
 
@@ -39,6 +44,11 @@
     button[aria-pressed="true"] { background: #1b2231; border-color: var(--open); color: #fff; }
     button.done { border-color: #2f6b4f; }
     button.done:hover { border-color: var(--done); }
+    /* Delete sits at the far end of the row, away from "Mark done" — they are one
+       mis-click apart otherwise, and only one of them is reversible in the UI. */
+    button.del { margin-left: auto; border-color: #6b2f36; color: #e2a0a6; }
+    button.del:hover { border-color: var(--danger); color: #fff; }
+    button.del.arm { background: #4a1c22; border-color: var(--danger); color: #fff; }
 
     .grid { display: grid; gap: 14px; }
     .note {
@@ -70,6 +80,19 @@
     }
     input[type=text]:focus { outline: none; border-color: var(--open); }
 
+    /* Back to the dashboard. Identical markup and #back id on every sub-page so all three
+       stay findable with one grep. Fixed rather than in-flow because this page scrolls a
+       long way — the body's top padding is set to clear it. */
+    #back {
+      position: fixed; left: 14px; top: 14px; z-index: 60;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 12px 7px 10px; border-radius: 7px;
+      background: rgba(12, 15, 22, .72); border: 1px solid #232a38;
+      color: #b9c0d0; text-decoration: none; backdrop-filter: blur(6px);
+      font: 12px/1 -apple-system, "Segoe UI", sans-serif; letter-spacing: .02em;
+    }
+    #back:hover { color: #fff; border-color: var(--accent); }
+
     #msg { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 4vw;
            background: #171c27; border-top: 1px solid var(--line2);
            font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--soft); }
@@ -78,10 +101,17 @@
   </style>
 </head>
 <body>
+  <a id="back" href="../" title="Back to all loops">← Loops</a>
+
   <h1>Feedback</h1>
+  <h2 id="who">All loops</h2>
   <p class="lede">Every note left on a loop, and whether it has been dealt with. Click a
   thumbnail to open the scene at the exact camera the note was written from, with the object
   already selected.</p>
+
+  <!-- Which Loop, then which state. Two rows, because they are two different questions and
+       one row of eight buttons reads as a single undifferentiated pile. -->
+  <div class="bar" id="projects"></div>
 
   <div class="bar">
     <span class="count" id="counts">loading…</span>
@@ -104,6 +134,11 @@
   let notes = [];
   let writable = false;
   let filter = 'open';
+  // Which Loop's tracker this is. Each Loop links here with ?project=<id> from the gallery,
+  // so the URL is the tracker — bookmarkable, and shareable without explaining which tab to
+  // click. 'all' is the everything view, which is what the old single tracker was.
+  let slate = { projects: [] };
+  let project = new URLSearchParams(location.search).get('project') || 'all';
   let source = null;          // whichever URL actually answered, so polling reuses it
   let lastSeen = '';          // serialised notes, to skip re-rendering when nothing moved
 
@@ -129,13 +164,63 @@
     return null;
   }
 
+  // A note records the SCENE it was written in (`loop`: factory-rt, cat-sequencer). A Loop can own
+  // more than one scene, so grouping needs loops.json — which the gallery reads too, so the
+  // mapping is stated once. No manifest is not an error: everything falls back to one list.
+  function scenesOf(id) {
+    return slate.projects.find((p) => p.id === id)?.scenes ?? null;
+  }
+  function inProject(n) {
+    if (project === 'all') return true;
+    const scenes = scenesOf(project);
+    return scenes ? scenes.includes(n.loop) : true;
+  }
+
+  function drawProjects() {
+    const name = project === 'all'
+      ? 'All loops'
+      : (slate.projects.find((p) => p.id === project)?.name ?? project);
+    document.getElementById('who').textContent = name;
+    document.title = `${name} — feedback`;
+
+    const bar = document.getElementById('projects');
+    const withScenes = slate.projects.filter((p) => p.scenes?.length);
+    if (!withScenes.length) { bar.replaceChildren(); return; }   // nothing to split by yet
+    const mk = (id, label) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.setAttribute('aria-pressed', String(project === id));
+      b.onclick = () => {
+        project = id;
+        // Replace, not push: the tracker is a view, and stacking every filter click into
+        // history means Back walks you through them instead of leaving the page.
+        const u = new URL(location.href);
+        if (id === 'all') u.searchParams.delete('project'); else u.searchParams.set('project', id);
+        history.replaceState(null, '', u);
+        drawProjects();
+        render();
+      };
+      return b;
+    };
+    bar.replaceChildren(
+      Object.assign(document.createElement('span'), { className: 'count', textContent: 'loop' }),
+      ...withScenes.map((p) => mk(p.id, p.name)),
+      mk('all', 'All loops'));
+  }
+
   async function load() {
+    try {
+      const r = await fetch('../loops.json', { cache: 'no-store' });
+      if (r.ok) slate = await r.json();
+    } catch { /* no manifest — one undivided list, exactly as before */ }
+    if (project !== 'all' && !scenesOf(project)) project = 'all';   // stale link in a bookmark
+
     const fresh = await fetchNotes();
     if (!fresh) { notes = []; say('could not load notes', true); return; }
     notes = fresh;
     lastSeen = JSON.stringify(fresh);
     say(writable
-      ? `${notes.length} notes · live from the dev server · changes are written to feedback/notes.json`
+      ? `${notes.filter(inProject).length} notes · live from the dev server · changes are written to feedback/notes.json`
       : 'read-only — no dev server. Run  node tools/dev-server.mjs 5173  to tick notes off.', !writable);
   }
 
@@ -154,7 +239,7 @@
       lastSeen = s;
       notes = fresh;
       render();
-      say(`updated · ${notes.filter((n) => n.status !== 'closed').length} open · changed elsewhere just now`);
+      say(`updated · ${notes.filter(inProject).filter((n) => n.status !== 'closed').length} open · changed elsewhere just now`);
     } catch { /* transient — the next tick will catch up */ }
   }
   setInterval(poll, 3000);
@@ -226,7 +311,49 @@
       why.onkeydown = (e) => { if (e.key === 'Enter') done.click(); };
       actions.append(why, done);
     }
+
+    // Two clicks, not one. The first arms it and says so; the second within 4 seconds does
+    // it. A plain one-click delete beside "Mark done" loses a note and its screenshot, and
+    // the poll would rebuild the row a moment later as though nothing had happened.
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = 'Delete';
+    del.title = 'Filed by mistake? This removes the note. It is kept in feedback/deleted.json.';
+    let armedUntil = 0, disarm = 0;
+    del.onclick = () => {
+      if (Date.now() < armedUntil) { clearTimeout(disarm); remove(n); return; }
+      armedUntil = Date.now() + 4000;
+      del.textContent = 'Really delete?';
+      del.classList.add('arm');
+      disarm = setTimeout(() => {
+        armedUntil = 0;
+        del.textContent = 'Delete';
+        del.classList.remove('arm');
+      }, 4000);
+    };
+    actions.appendChild(del);
     return el;
+  }
+
+  // A dev server started before an endpoint existed does not 404 as JSON — the request falls
+  // through to the STATIC handler, which answers `text/plain: not found: /api/…`. Calling
+  // r.json() on that throws `Unexpected token 'o'`, which reads as a bug in the note rather
+  // than "your server is old". Check the response shape before parsing, and name the cure.
+  async function postJSON(path, body) {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!(r.headers.get('content-type') || '').includes('json')) {
+      const text = (await r.text()).trim();
+      throw new Error(r.status === 404 && /^not found/.test(text)
+        ? `this dev server has no ${path} — restart it:  node tools/dev-server.mjs 5173`
+        : `${r.status} ${text.slice(0, 120)}`);
+    }
+    const out = await r.json();
+    if (!out.ok) throw new Error(out.error || 'request failed');
+    return out;
   }
 
   async function update(n, patch) {
@@ -239,18 +366,31 @@
       return;
     }
     try {
-      const r = await fetch('/api/feedback/update', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: n.id, ...patch }),
-      });
-      const out = await r.json();
-      if (!out.ok) throw new Error(out.error || 'update failed');
+      const out = await postJSON('/api/feedback/update', { id: n.id, ...patch });
       Object.assign(n, out.note);
       render();
       say(`${n.id} → ${n.status}  ·  saved to feedback/notes.json`);
     } catch (e) {
       say('save failed: ' + e.message, true);
+    }
+  }
+
+  async function remove(n) {
+    if (!writable) {
+      say('read-only — deleting needs the dev server: node tools/dev-server.mjs 5173', true);
+      return;
+    }
+    try {
+      const out = await postJSON('/api/feedback/delete', { id: n.id });
+      // Take the server's list back rather than splicing our own, and refresh lastSeen with
+      // it — otherwise the 3-second poll sees a difference and re-renders announcing the
+      // note "changed elsewhere just now", which is us.
+      notes = out.notes;
+      lastSeen = JSON.stringify(notes);
+      render();
+      say(`${n.id} deleted  ·  kept in feedback/deleted.json if you need it back`);
+    } catch (e) {
+      say('delete failed: ' + e.message, true);
     }
   }
 
@@ -268,11 +408,14 @@
       ? focused.closest('.note')?.dataset.id : null;
     const caret = focusedId ? [focused.selectionStart, focused.selectionEnd] : null;
 
-    const open = notes.filter((n) => n.status !== 'closed').length;
-    const closed = notes.length - open;
-    counts.innerHTML = `<b>${open}</b> open · <b>${closed}</b> done · ${notes.length} total`;
+    // Counts are of THIS Loop, not of the file. A tracker that says "17 total" while showing
+    // 4 cards is the pile the split was meant to get rid of.
+    const mine = notes.filter(inProject);
+    const open = mine.filter((n) => n.status !== 'closed').length;
+    const closed = mine.length - open;
+    counts.innerHTML = `<b>${open}</b> open · <b>${closed}</b> done · ${mine.length} total`;
 
-    const shown = notes.filter((n) =>
+    const shown = mine.filter((n) =>
       filter === 'all' ? true : filter === 'open' ? n.status !== 'closed' : n.status === 'closed');
 
     grid.replaceChildren(...(shown.length
@@ -301,6 +444,7 @@
   }
 
   await load();
+  drawProjects();
   render();
 </script>
 </body>

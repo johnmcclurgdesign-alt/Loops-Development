@@ -1,0 +1,823 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cat Sequencer — Dripping Pickle</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 14px; bottom: 12px;
+      font: 11px/1.6 ui-monospace, Consolas, monospace;
+      color: #7f8796; user-select: none; white-space: pre;
+    }
+    /* Top-right on purpose: the feedback panel owns bottom-right (310px wide). */
+    #clips {
+      position: fixed; right: 14px; top: 14px; width: 206px; z-index: 40;
+      font: 11px/1.5 ui-monospace, Consolas, monospace;
+      background: rgba(16,18,23,0.88); border: 1px solid #262c38; border-radius: 7px;
+      padding: 8px; color: #9aa3b2; backdrop-filter: blur(6px);
+    }
+    #clips h4 { margin: 0 0 7px; font-size: 10px; letter-spacing: .09em;
+                text-transform: uppercase; color: #626b7c; font-weight: 600; }
+    /* Two columns: a single stack of 12 runs down under the feedback panel and
+       the bottom clips become unclickable. Six rows clears it. */
+    /* Scrolls because there are 31 clips — a flat list is taller than the gap
+       above the feedback panel, and the ones at the bottom become unclickable. */
+    /* Sized off the viewport, not a fixed number: the feedback panel is anchored
+       to the BOTTOM, so its top edge moves with the window and a constant cap
+       overlaps it as soon as the window gets shorter. 538px is this panel's own
+       chrome plus the feedback panel's height and both margins. The floor keeps
+       it usable on a very short window, where scrolling takes over. */
+    #clips .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px;
+                   max-height: max(88px, calc(100vh - 538px)); overflow-y: auto; }
+    #clips .grid::-webkit-scrollbar { width: 7px; }
+    #clips .grid::-webkit-scrollbar-thumb { background: #333b48; border-radius: 4px; }
+    #clips button {
+      display: block; width: 100%; text-align: left; margin: 0;
+      font: inherit; padding: 4px 6px; cursor: pointer; color: #aeb7c6;
+      background: #171b23; border: 1px solid #262c38; border-radius: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    #clips button:hover { background: #1e242e; color: #dfe5ee; }
+    #clips button.on { background: #2d4a2f; border-color: #47714a; color: #d8f0d9; }
+    #clips .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    #clips .row.sep { margin-top: 8px; padding-top: 8px; border-top: 1px solid #262c38; }
+    #clips .row > span:first-child { width: 42px; color: #7f8796; }
+    #clips input[type=range] { flex: 1; min-width: 0; accent-color: #6f9d72; }
+    #clips .val { width: 32px; text-align: right; color: #7f8796; }
+    #clips .ctl { margin-top: 8px; }
+    #clips .ctl button { text-align: center; padding: 5px 4px; }
+    #clips select {
+      width: 100%; margin-top: 6px; font: inherit; padding: 4px 6px; cursor: pointer;
+      color: #aeb7c6; background: #171b23; border: 1px solid #262c38; border-radius: 4px;
+    }
+    #clips .read { margin-top: 6px; font-size: 10px; text-align: center; color: #6b8a6e; }
+    /* The two modes are mutually exclusive — steering drives the mixer, or you
+       pick clips by hand — so the panel shows only the half that currently does
+       anything. Greying them out instead left it 350px tall, which ran under the
+       feedback panel and hid the dial at the bottom. */
+    #clips .hide { display: none; }
+    /* Back to the dashboard. Identical markup and #back id on every sub-page so all three
+       stay findable with one grep, even though the loops share no runtime code. Top-left is
+       the only free corner: hud bottom-left, clips top-right, feedback bottom-right.
+       It is DOM, so it never lands in a feedback screenshot — those capture the canvas. */
+    #back {
+      position: fixed; left: 14px; top: 14px; z-index: 60;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 12px 7px 10px; border-radius: 7px;
+      background: rgba(12, 15, 22, .72); border: 1px solid #232a38;
+      color: #b9c0d0; text-decoration: none; backdrop-filter: blur(6px);
+      font: 12px/1 -apple-system, "Segoe UI", sans-serif; letter-spacing: .02em;
+    }
+    #back:hover { color: #fff; border-color: #c9a227; }
+  </style>
+</head>
+<body>
+  <a id="back" href="../../" title="Back to all loops">← Loops</a>
+  <div id="hud">loading…</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "yuka": "https://cdn.jsdelivr.net/npm/yuka@0.7.8/build/yuka.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { createFlyCam }  from '../../tools/flycam.js';
+    import * as YUKA         from 'yuka';
+
+    // ── palette ─────────────────────────────────────────────────────
+    // Deliberately neutral. This scene exists to judge the ANIMATION, so
+    // nothing here should flatter the cat or tint him. The factory's own
+    // atmosphere gets applied later, once he moves correctly.
+    const GROUND     = 0x2a2d33;   // mid-dark so both fur and shadow read
+    const GRID_MAJOR = 0x3d434e;
+    const GRID_MINOR = 0x2f343d;
+    const SKY_TOP    = 0x9fb4cc;   // hemisphere up — cool, like a skylight
+    const SKY_BOT    = 0x3a3630;   // hemisphere down — warm bounce off the floor
+    const KEY_COLOR  = 0xfff4e2;
+
+    const q = new URLSearchParams(location.search);
+    const EXPOSURE = parseFloat(q.get('exp') ?? '1.15');
+
+    // ── wandering ───────────────────────────────────────────────────
+    // How fast he actually travels, in metres per second. A domestic cat
+    // ambling is around 0.4–0.5; this is the dial to move if he looks like
+    // he is in a hurry.
+    const ROAM_SPEED = parseFloat(q.get('speed') ?? '0.45');
+    // The travel speed the walk clip was AUTHORED for. The clip's playback rate
+    // is (actual speed / this), so when the two agree the rate is 1.0. Tune it
+    // against the one-metre grid until the paws stop sliding — this is the only
+    // honest way to kill foot skate, and it is why the grid is there.
+    const STRIDE     = parseFloat(q.get('stride') ?? '0.45');
+    // He wanders freely inside this radius and gets pulled back outside it.
+    const ROAM_R     = parseFloat(q.get('roam') ?? '5.0');
+    // ★ THE TURN. A cat does not rotate on the spot to change direction — it keeps
+    // walking and arcs round until it is facing the new way. So the thing to set is
+    // a minimum ARC RADIUS in metres, not a turn speed. Everything else follows:
+    // steering force = v^2 / r, and angular rate = v / r. Set the force directly
+    // and you get a pivot, which is what reads as "robot wearing a cat".
+    const TURN_R     = parseFloat(q.get('turn') ?? '0.55');
+    // How restless the wandering is — Yuka's wander jitter. Low values do NOT read
+    // as calm, they read as broken: the steer target random-walks so slowly that he
+    // holds one turn direction for most of a minute and drives in circles. Measured
+    // over five minutes, the worst single sweep in one direction was 597 degrees at
+    // jitter 2 against 232 at jitter 9, with the median sweep dropping 117 -> 4.
+    const MEANDER    = parseFloat(q.get('meander') ?? '9');
+    // Below this he counts as stopped and plays an idle. Without a deadband he
+    // flickers between walk and idle every time steering eases off.
+    const MOVE_EPS   = 0.06;
+
+    // The feedback panel is ON unless you ask for it not to be. It used to need ?dev=1, which
+    // meant a note could only be left by someone who already knew the flag — so anyone opening
+    // the plain link had no way to say anything, which is backwards for a review tool. The
+    // panel works out for itself whether it can WRITE (dev server present) or only copy to the
+    // clipboard, so the URL no longer has to say. `?fb=0` for a clean frame to capture.
+    // Note this pins preserveDrawingBuffer on for every visitor — the cost of screenshots.
+    const FEEDBACK = q.get('fb') !== '0' && q.get('dev') !== '0' && q.get('review') !== '0';
+
+    // Sitting, not standing — see play() below.
+    const START_CLIP = q.get('clip') ?? 'sit_loop';
+
+    // The .glb files get re-exported constantly while we tune clips, and the
+    // browser will happily serve a stale one. Same trick as loops/factory.
+    const ASSET_V = q.get('assets') ?? String(Date.now());
+    const bust = (p) => p + '?v=' + ASSET_V;
+
+    const hud = document.getElementById('hud');
+
+    // ── clips ───────────────────────────────────────────────────────
+    // Ten of the pack's ~170, chosen to cover the states a wandering cat needs.
+    // Every movement clip is the _IP (in place) variant: Yuka will move the body
+    // later, so a root-motion clip would travel twice.
+    //
+    // NO TURN CLIPS, deliberately. The Unreal cat turned by firing a discrete
+    // turn animation, and that is the root of the wall-walking there: each arc
+    // swept a fixed 90 degrees regardless of the angle actually needed, then
+    // committed to the new heading and walked blind. A steering system produces
+    // a CONTINUOUS heading change, and a fixed-length turn clip fights it. Here
+    // the body just rotates under the walk cycle instead.
+    //
+    // loop:false = a transition. It holds its final pose instead of restarting,
+    // which is how it will actually be used (walk -> sit_start -> sit_loop).
+    // Ordered by family, because the picker is a flat list and the order is the
+    // only grouping it has.
+    const CLIPS = [
+      { file: 'idle_1',              label: 'Idle 1',       loop: true  },
+      { file: 'idle_2',              label: 'Idle 2',       loop: true  },
+      { file: 'idle_3',              label: 'Idle 3',       loop: true  },
+      { file: 'idle_4',              label: 'Idle 4',       loop: true  },
+      { file: 'idle_5',              label: 'Idle 5',       loop: true  },
+      { file: 'idle_6',              label: 'Idle 6',       loop: true  },
+      { file: 'idle_7',              label: 'Idle 7',       loop: true  },
+      { file: 'walk',                label: 'Walk',         loop: true  },
+      { file: 'trot',                label: 'Trot',         loop: true  },
+      // Sit: in -> hold -> out. The chain is why the transitions matter.
+      { file: 'sit_start',           label: 'Sit in',       loop: false },
+      { file: 'sit_loop',            label: 'Sit',          loop: true  },
+      { file: 'sit_end',             label: 'Sit out',      loop: false },
+      // Lie on belly. `lie_end` closes a real gap — we shipped a way to lie down
+      // and fall asleep with no clip for getting back up.
+      { file: 'lie_start',           label: 'Lie in',       loop: false },
+      { file: 'lie_loop',            label: 'Lie',          loop: true  },
+      { file: 'lie_sleep_start',     label: 'Lie doze in',  loop: false },
+      { file: 'lie_sleep',           label: 'Lie doze',     loop: true  },
+      { file: 'lie_sleep_end',       label: 'Lie doze out', loop: false },
+      { file: 'lie_end',             label: 'Lie out',      loop: false },
+      // Lie on side — a second rest shape so he isn't always the same silhouette.
+      { file: 'lieside_start',       label: 'Side in',      loop: false },
+      { file: 'lieside_loop',        label: 'Side',         loop: true  },
+      { file: 'lieside_sleep_start', label: 'Side doze in', loop: false },
+      { file: 'lieside_sleep',       label: 'Side doze',    loop: true  },
+      { file: 'lieside_sleep_end',   label: 'Side doze out',loop: false },
+      { file: 'lieside_end',         label: 'Side out',     loop: false },
+      // Pose-to-pose, so he can change rest shape without standing up first.
+      { file: 'trans_sit_belly',     label: 'Sit>Lie',      loop: false },
+      { file: 'trans_belly_sit',     label: 'Lie>Sit',      loop: false },
+      { file: 'trans_sit_side',      label: 'Sit>Side',     loop: false },
+      { file: 'trans_side_sit',      label: 'Side>Sit',     loop: false },
+      // Grooming. These are the ones that read as "cat" from across the room.
+      { file: 'lick',                label: 'Lick',         loop: true  },
+      { file: 'scratch',             label: 'Scratch',      loop: true  },
+      { file: 'sharpen',             label: 'Claws',        loop: true  },
+      // Jumping is a KIT, not a clip: launch -> air pose -> landing, assembled to
+      // fit the height and distance. The three "whole thing" ones at the top are
+      // the pack's pre-assembled versions; the rest are the pieces. Every one is a
+      // one-shot, so they hold their last frame instead of restarting.
+      { file: 'jump_place',          label: 'Jump up',      loop: false },
+      { file: 'jump_fwd',            label: 'Jump fwd',     loop: false },
+      { file: 'jump_run',            label: 'Jump run',     loop: false },
+      { file: 'jump_launch_f',       label: 'Launch fwd',   loop: false },
+      { file: 'jump_launch_dn',      label: 'Launch down',  loop: false },
+      { file: 'jump_air_up',         label: 'Air up',       loop: false },
+      { file: 'jump_air_horiz',      label: 'Air horiz',    loop: false },
+      { file: 'jump_air_high',       label: 'Air high',     loop: false },
+      { file: 'jump_land',           label: 'Land',         loop: false },
+      { file: 'jump_land_f',         label: 'Land fwd',     loop: false },
+      // The payoff for a factory full of crates: arriving ON something.
+      { file: 'jump_up_low',         label: 'Ledge low',    loop: false },
+      { file: 'jump_up_high',        label: 'Ledge high',   loop: false },
+    ];
+
+    // ── fur ─────────────────────────────────────────────────────────
+    // Six coats, loaded as external JPEGs rather than baked into the .glb — one
+    // source of truth, and it keeps the default from being pinned by the export.
+    //
+    // The pack also ships a "_M_" set of six. That is NOT six more coats: it is the
+    // same six at 512 instead of 2048. Mean colours match pairwise (c5 140,106,77 vs
+    // m5 140,104,77) and downscaling ours to 512 gives a PSNR of 34-39 dB against
+    // theirs, which is the same artwork. Not shipped.
+    //
+    // Labels are inferred from each texture's MEAN COLOUR, not from the artist —
+    // they are a rough guide, and worth renaming once someone has looked at them.
+    // Ordered dark to light, which reads better than the pack's numbering.
+    const FUR = [
+      { id: 'c1', label: 'Black' },
+      { id: 'c3', label: 'Charcoal' },
+      { id: 'c6', label: 'Brown tabby' },
+      { id: 'c5', label: 'Ginger' },
+      { id: 'c4', label: 'Silver' },
+      { id: 'c2', label: 'Cream' },
+    ];
+    const FUR_DEFAULT = q.get('fur') ?? 'c6';    // c6 is what the pack had on the mesh
+
+    // ── renderer ────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      // needed so the feedback panel can grab the canvas for a screenshot
+      preserveDrawingBuffer: FEEDBACK,
+    });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = EXPOSURE;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x14161a);
+    // Light haze so the grid fades out rather than ending at a hard edge.
+    scene.fog = new THREE.Fog(0x14161a, 9, 26);
+
+    const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.02, 200);
+    camera.position.set(1.15, 0.62, 1.35);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 0.18, 0);          // roughly the cat's shoulder
+    controls.update();
+
+    const fly = createFlyCam({ camera, controls });
+    window.__fly = fly;
+
+    // ── ground ──────────────────────────────────────────────────────
+    // The grid is 1 metre per major square. This is the measuring stick for
+    // foot skate: when we drive him with Yuka, a walk clip whose feet match
+    // the travel will keep each paw planted on one line as it passes.
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(60, 60),
+      new THREE.MeshStandardMaterial({ color: GROUND, roughness: 0.95, metalness: 0 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    const grid = new THREE.GridHelper(40, 40, GRID_MAJOR, GRID_MINOR);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.5;
+    grid.position.y = 0.001;                  // lift off the plane or it z-fights
+    scene.add(grid);
+
+    // ── lights ──────────────────────────────────────────────────────
+    scene.add(new THREE.HemisphereLight(SKY_TOP, SKY_BOT, 1.6));
+
+    const key = new THREE.DirectionalLight(KEY_COLOR, 2.4);
+    key.position.set(2.6, 4.0, 2.2);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    // Tight frustum around the cat. A default-sized one spreads 2048 texels over
+    // tens of metres and the shadow under his paws turns to mush.
+    const s = key.shadow.camera;
+    s.left = -3; s.right = 3; s.top = 3; s.bottom = -3; s.near = 0.5; s.far = 14;
+    key.shadow.bias = -0.0012;
+    scene.add(key);
+
+    // Cool rim from behind so the silhouette separates from the dark floor —
+    // silhouette is most of what you judge in an animation.
+    const rim = new THREE.DirectionalLight(0x9dc0ff, 0.9);
+    rim.position.set(-2.4, 1.6, -2.8);
+    scene.add(rim);
+
+    // ── load ────────────────────────────────────────────────────────
+    const loader = new GLTFLoader();
+    const load = (url) => new Promise((res, rej) => loader.load(bust(url), res, undefined, rej));
+
+    const texLoader = new THREE.TextureLoader();
+    let catMat = null, furId = FUR_DEFAULT;
+
+    function setFur(id) {
+      furId = id;
+      texLoader.load(bust(`../../assets/cat/fur/${id}.jpg`), (t) => {
+        // flipY = false because these sample glTF UVs, which have a top-left origin.
+        // GLTFLoader sets this on textures inside the .glb; one loaded separately does
+        // NOT get it, and the fur comes out mirrored down the cat.
+        t.flipY = false;
+        // Base colour is sRGB. Left linear it renders washed out and pale.
+        t.colorSpace = THREE.SRGBColorSpace;
+        t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        if (!catMat) return;
+        // Swapping repeatedly without this leaks a 1024 texture on the GPU each time.
+        catMat.map?.dispose();
+        catMat.map = t;
+        catMat.needsUpdate = true;
+      });
+    }
+
+    let mixer = null, current = null, model = null;
+    const actions = {};
+    let speed = 1.0;                     // manual clip playback rate (wander OFF)
+
+    // Yuka side. Kept separate from the three.js side on purpose: Yuka decides
+    // WHERE he goes, the mixer decides HOW his legs move, and the only thing
+    // crossing between them is travel speed -> clip playback rate.
+    let entityManager = null, vehicle = null, wander = null, homeSeek = null;
+    // Off unless asked. This is a clip-inspection scene first — you open it to look at
+    // an animation, and a cat who walks out of frame while you are reading the list is
+    // in the way. `?wander=1` starts him moving.
+    let wanderOn = q.get('wander') === '1';
+    let roamSpeed = ROAM_SPEED, stride = STRIDE, turnR = TURN_R, meander = MEANDER;
+
+    // A cat corners by walking the corner. Both of these derive from the arc
+    // radius, so they can never disagree with each other:
+    //   force = v^2 / r   caps how hard he can pull sideways (the path)
+    //   rate  = v / r     caps how fast the body can swing (the look)
+    // Re-applied whenever speed or radius changes.
+    function applyTurn() {
+      if (!vehicle) return;
+      vehicle.maxSpeed    = roamSpeed;
+      vehicle.maxForce    = (roamSpeed * roamSpeed) / turnR;
+      vehicle.maxTurnRate = roamSpeed / turnR;
+    }
+
+    // Crossfade rather than cut. Even in a test scene a hard swap makes every
+    // clip look broken at its first frame, and fading is what the real state
+    // machine will do anyway.
+    function play(name, fade = 0.25) {
+      const next = actions[name];
+      if (!next) return;
+      if (next === current) {
+        // Re-clicking a ONE-SHOT has to replay it. It finished a second ago and is
+        // holding its last frame, so the obvious move — click the jump again to
+        // watch the jump again — would otherwise do nothing at all, which reads as
+        // a broken button. Loops are left alone: restarting one mid-cycle is a jump.
+        if (next.loop === THREE.LoopOnce) next.reset().play();
+        return;
+      }
+      next.reset();
+      next.setEffectiveTimeScale(speed);
+      next.setEffectiveWeight(1);
+      next.fadeIn(fade).play();
+      if (current) current.fadeOut(fade);
+      current = next;
+      for (const b of document.querySelectorAll('#clips button')) {
+        b.classList.toggle('on', b.dataset.clip === name);
+      }
+    }
+
+    (async () => {
+      try {
+        const gltf = await load('../../assets/cat/cat.glb');
+        model = gltf.scene;
+        model.traverse((o) => {
+          if (o.isMesh) {
+            o.castShadow = true;
+            o.frustumCulled = false;   // a skinned mesh's bounds don't follow its bones
+          }
+        });
+        // Where he stands is an OUTPUT of the steering, not something an artist placed,
+        // so the feedback panel must not offer to drag him. He stays fully selectable —
+        // "he shouldn't sleep there" is exactly the note worth writing — but the handles
+        // stay off. Dragging him used to offset the mesh INSIDE the group Yuka drives,
+        // which the sim never corrects and which came back on every reload.
+        model.userData.noMove = true;
+        scene.add(model);
+
+        // Base colour was stripped from the .glb, so the material arrives with no map
+        // at all — the fur is whatever we put here.
+        model.traverse((o) => { if (o.isSkinnedMesh && !catMat) catMat = o.material; });
+        setFur(FUR_DEFAULT);
+
+        // Measure rather than assume. Unreal works in centimetres and glTF in
+        // metres; if export_uniform_scale was wrong this box reads ~30, not ~0.3.
+        const box = new THREE.Box3().setFromObject(model);
+        const size = box.getSize(new THREE.Vector3());
+
+        // Each clip is its own .glb — the Unreal exporter will not put more than
+        // one animation in a file, and bundling the mesh into each would have
+        // meant twelve copies of a 5.8 MB cat.
+        const loaded = await Promise.all(
+          CLIPS.map((c) => load(`../../assets/cat/anim_${c.file}.glb`)
+            .then((g) => ({ c, clip: g.animations[0] }))
+            .catch(() => ({ c, clip: null })))
+        );
+
+        mixer = new THREE.AnimationMixer(model);
+        const missing = [];
+        for (const { c, clip } of loaded) {
+          if (!clip) { missing.push(c.file); continue; }
+          clip.name = c.file;
+          const a = mixer.clipAction(clip);
+          a.setLoop(c.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
+          a.clampWhenFinished = !c.loop;   // a transition holds its end pose
+          actions[c.file] = a;
+        }
+
+        buildClipUI(loaded.filter((l) => l.clip).map((l) => l.c));
+        // Sitting is the resting state, so it is what he should be doing when you arrive —
+        // a standing idle reads as a cat about to do something. Straight into `sit_loop`
+        // rather than through `sit_start`, because there is no standing pose to sit down
+        // FROM on the first frame; the chain matters only for a live transition.
+        play(START_CLIP, 0);
+
+        // ── steering ────────────────────────────────────────────────
+        entityManager = new YUKA.EntityManager();
+        vehicle = new YUKA.Vehicle();
+        applyTurn();                    // sets maxSpeed, maxForce and maxTurnRate together
+        // Start him already walking, in a random direction. From a dead stop the
+        // velocity is zero, so there is no heading to face and the body snaps to
+        // whatever steering picks first — a visible spin on load. Measured: 522
+        // deg/s over the first frames against a 47 deg/s cap, then clean forever.
+        const a0 = Math.random() * Math.PI * 2;
+        vehicle.velocity.set(Math.sin(a0) * roamSpeed, 0, Math.cos(a0) * roamSpeed);
+        vehicle.rotation.fromEuler(0, a0, 0);
+        // Yuka's vehicle forward is +Z, and the exported cat's head sits at +Z
+        // too (checked against the bone world positions, not assumed), so no
+        // rotation correction is needed. Guess this wrong and he moonwalks.
+        vehicle.setRenderComponent(model, (entity, rc) => {
+          rc.matrix.copy(entity.worldMatrix);
+        });
+        // REQUIRED. Left on, three recomposes .matrix from position/quaternion
+        // every frame and silently throws away everything Yuka just wrote —
+        // the cat animates on the spot and never moves an inch.
+        model.matrixAutoUpdate = false;
+
+        wander = new YUKA.WanderBehavior();
+        // Leave these two alone. radius/distance sets how far off-straight a single
+        // choice can be — atan(1/5) = 11 degrees here. Widening it does NOT give a
+        // livelier walk: it parks the steer target further off centre so it takes
+        // even LONGER to cross back, and the worst one-way sweep got worse, 232 deg
+        // at radius 1 against 699 at radius 2 and 784 at radius 3. Restlessness is
+        // the jitter's job, not this.
+        wander.radius   = 1.0;
+        wander.distance = 5.0;
+        wander.jitter   = meander;
+
+        // Wander on its own drifts away and never comes back. This pulls him
+        // home, but only once he is past ROAM_R — inside the circle his path
+        // stays pure wander, so we are judging the wander and not the leash.
+        homeSeek = new YUKA.SeekBehavior(new YUKA.Vector3(0, 0, 0));
+        homeSeek.weight = 0;
+
+        // ★ ORDER IS PRIORITY, and it is not a weighted average. Yuka's
+        // SteeringManager walks the behaviours in the order they were ADDED and
+        // gives each one whatever force budget is left under maxForce — so the
+        // first behaviour can consume the lot and later ones get nothing.
+        // With wander added first, the leash was starved no matter what weight it
+        // carried: he reached 20.7 m from a 5 m circle and spent 46% of five
+        // minutes beyond 10 m. Seek goes FIRST; it is inert inside the circle
+        // (weight 0), so wander still gets the full budget where it matters.
+        vehicle.steering.add(homeSeek);
+        vehicle.steering.add(wander);
+
+        entityManager.add(vehicle);
+        buildWanderUI();
+
+        const meshName = (() => {
+          let n = '(none)';
+          model.traverse((o) => { if (o.isMesh && n === '(none)') n = o.name || '(unnamed mesh)'; });
+          return n;
+        })();
+
+        hud.textContent =
+          `cat ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} m   mesh ${meshName}\n` +
+          `clips ${Object.keys(actions).length}/${CLIPS.length}` +
+          (missing.length ? `  MISSING: ${missing.join(', ')}` : '') + `   exposure ${EXPOSURE}\n` +
+          fly.hint;
+
+        if (FEEDBACK) {
+          const { initFeedback } = await import('../../tools/feedback.js');
+          initFeedback({ scene, camera, renderer, controls,
+                         pickRoot: model, loop: 'cat-sequencer' });
+        }
+      } catch (e) {
+        hud.textContent = 'LOAD FAILED: ' + (e?.message ?? e);
+        console.error(e);
+      }
+    })();
+
+    // ── clip picker ─────────────────────────────────────────────────
+    function buildClipUI(list) {
+      const box = document.createElement('div');
+      box.id = 'clips';
+      box.innerHTML = '<h4>Clips</h4>';
+      const g = document.createElement('div');
+      g.className = 'grid';
+      for (const c of list) {
+        const b = document.createElement('button');
+        b.textContent = c.label;
+        b.title = c.label;            // the label ellipsises at this width
+        b.dataset.clip = c.file;
+        b.onclick = () => play(c.file);
+        g.appendChild(b);
+      }
+      box.appendChild(g);
+
+      // Manual clip rate. Only meaningful with wander OFF — with it on, the rate
+      // is computed from travel speed instead.
+      manualDial = makeDial({ label: 'rate', min: 0.1, max: 2, step: 0.05, value: 1,
+        onInput: (v) => {
+          speed = v;
+          if (current) current.setEffectiveTimeScale(v);
+        } });
+      manualDial.classList.add('sep');
+      box.appendChild(manualDial);
+      document.body.appendChild(box);
+    }
+
+    let manualDial = null, clipGrid = null;
+
+    // Same contract as the dials in tools/looks.js, `curve` included, and mapped the
+    // same way — the input runs 0..1 and the value comes back through a power curve.
+    // A curve > 1 spends more of the slider on the LOW end. Nobody should have to
+    // learn a second scheme for the same widget.
+    function makeDial({ label, min, max, step = 0.01, value, digits = 2, curve = 1, onInput }) {
+      const c = curve && curve !== 1 ? curve : 0;
+      const toValue  = (t) => min + (max - min) * Math.pow(t, c);
+      const toSlider = (v) => Math.pow((v - min) / (max - min), 1 / c);
+
+      const row = document.createElement('div');
+      row.className = 'row';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const sl = document.createElement('input');
+      sl.type = 'range';
+      if (c) {
+        sl.min = '0'; sl.max = '1'; sl.step = '0.002';
+        sl.value = String(toSlider(value));
+      } else {
+        sl.min = min; sl.max = max; sl.step = step; sl.value = value;
+      }
+      const val = document.createElement('span');
+      val.className = 'val';
+      val.textContent = (+value).toFixed(digits);
+      sl.oninput = () => {
+        const v = c ? toValue(parseFloat(sl.value)) : parseFloat(sl.value);
+        val.textContent = v.toFixed(digits);
+        onInput(v);
+      };
+      row.append(name, sl, val);
+      return row;
+    }
+
+    // ── wander controls ─────────────────────────────────────────────
+    function buildWanderUI() {
+      const box = document.getElementById('clips');
+      if (!box) return;
+      clipGrid = box.querySelector('.grid');
+
+      // The toggle and Recentre sit together and OUTSIDE `panel`, so Recentre stays
+      // available in both modes — it is just as useful after dragging him somewhere
+      // by hand as it is when he has wandered out of frame.
+      const ctl = document.createElement('div');
+      ctl.className = 'grid ctl';
+      const btn = document.createElement('button');
+      btn.onclick = () => setWander(!wanderOn);
+      const reset = document.createElement('button');
+      reset.textContent = 'Recentre';
+      reset.title = 'Put him back at 0,0 facing a new direction';
+      reset.onclick = recentre;
+      ctl.append(btn, reset);
+      box.appendChild(ctl);
+
+      // Fur, outside `panel` so it is there in both modes — you want to judge a coat
+      // while he is walking as much as while he is posed.
+      const fur = document.createElement('select');
+      fur.title = 'Coat — labels are guessed from mean colour';
+      for (const f of FUR) {
+        const o = document.createElement('option');
+        o.value = f.id; o.textContent = f.label;
+        if (f.id === furId) o.selected = true;
+        fur.appendChild(o);
+      }
+      fur.onchange = () => setFur(fur.value);
+      box.appendChild(fur);
+
+      const panel = document.createElement('div');
+      box.appendChild(panel);
+
+      readout = document.createElement('div');
+      readout.className = 'read';
+      panel.appendChild(readout);
+
+      // Travel speed. A cat ambling is around 0.4-0.5 m/s.
+      panel.appendChild(makeDial({ label: 'speed', min: 0.1, max: 1.2, value: roamSpeed,
+        onInput: (v) => { roamSpeed = v; applyTurn(); } }));
+
+      // ★ The arc: the tightest circle he is allowed to walk, in metres. This is the
+      // "cats don't pivot" dial — toward 0.2 he starts spinning on the spot, at 2.5
+      // he corners like a bus.
+      //
+      // CURVED, because turn rate is speed/radius — a reciprocal. On a linear slider
+      // everything that matters was crammed into the bottom sixth (the 0.55 default
+      // sat at 15% of travel) and the top two thirds all looked the same. A curve of
+      // 2.2 puts the default at 42% and gives the 0.2-0.7 range, where the character
+      // of the turn actually changes, roughly half the travel. Same 2.2 the shafts
+      // dial in looks.js uses, for the same reason.
+      panel.appendChild(makeDial({ label: 'arc', min: 0.2, max: 2.5, value: turnR, curve: 2.2,
+        onInput: (v) => { turnR = v; applyTurn(); } }));
+
+      // How restless he is. Low is not calm — it is one long circle. See MEANDER.
+      panel.appendChild(makeDial({ label: 'meander', min: 1, max: 20, step: 0.5,
+        value: meander, digits: 1,
+        onInput: (v) => { meander = v; if (wander) wander.jitter = v; } }));
+
+      // The travel speed the walk clip was authored for. Tune against the grid
+      // until a paw stays planted on one line as it passes.
+      panel.appendChild(makeDial({ label: 'stride', min: 0.15, max: 1.2, value: stride,
+        onInput: (v) => { stride = v; } }));
+
+      setWander(wanderOn);
+
+      function setWander(on) {
+        wanderOn = on;
+        btn.textContent = on ? 'Wander: ON' : 'Wander: OFF';
+        btn.classList.toggle('on', on);
+        // Manual picking fights a running state machine, and dragging the cat in
+        // the feedback panel cannot stick while Yuka owns his matrix. So the
+        // button swaps which half of the panel exists rather than showing both.
+        clipGrid?.classList.toggle('hide', on);
+        manualDial?.classList.toggle('hide', on);
+        panel.classList.toggle('hide', !on);
+        if (!on && model) {
+          // Hand the transform back to three, keeping exactly where he stands.
+          model.matrixAutoUpdate = true;
+          model.matrix.decompose(model.position, model.quaternion, model.scale);
+        } else if (on && model) {
+          model.matrixAutoUpdate = false;
+          if (vehicle) {
+            vehicle.position.set(model.position.x, 0, model.position.z);
+            vehicle.rotation.fromEuler(0, model.rotation.y, 0);
+            // Pick the arc back up from wherever he is now facing, rather than
+            // carrying a stale heading from before he was moved.
+            travelDir = model.rotation.y;
+            vehicle.velocity.set(Math.sin(travelDir) * roamSpeed, 0,
+                                 Math.cos(travelDir) * roamSpeed);
+          }
+        }
+      }
+    }
+
+    // ── steering step ───────────────────────────────────────────────
+    let readout = null, readoutT = 0;
+    // The direction he is actually TRAVELLING, in radians. Held across frames so
+    // it can only change by the arc's turn rate — this is what makes the path a
+    // curve instead of a sequence of instant direction changes. null = re-seed
+    // from whatever the steering picks on the next frame.
+    let travelDir = null;
+
+    // Put him back at the origin on a fresh random heading. Which object owns his
+    // transform depends on the mode, so both have to be written: with wander ON
+    // Yuka drives the matrix, with it OFF three does. Writing only one leaves him
+    // snapping back to where he was the moment the mode changes.
+    function recentre() {
+      const a = Math.random() * Math.PI * 2;
+      travelDir = a;
+      if (vehicle) {
+        vehicle.position.set(0, 0, 0);
+        vehicle.rotation.fromEuler(0, a, 0);
+        // Non-zero, or the heading is undefined again for the first few frames.
+        vehicle.velocity.set(Math.sin(a) * roamSpeed, 0, Math.cos(a) * roamSpeed);
+      }
+      if (model) {
+        model.position.set(0, 0, 0);
+        model.rotation.set(0, a, 0);
+        model.updateMatrix();
+      }
+    }
+
+    function stepWander(dt) {
+      if (!entityManager) return;
+      entityManager.update(dt);
+
+      // WanderBehavior picks its target on a SPHERE, so left alone it will
+      // happily steer the cat up off the floor and fly him around. This is a
+      // ground animal: pin him to y = 0.
+      vehicle.position.y = 0;
+
+      // ★ A CAT CHANGES DIRECTION, NOT PACE. Steering here is used only to bend
+      // the path — never to speed up, slow down, or stop.
+      //
+      // This has to be imposed, because a steering force is a vector and part of
+      // it points along the velocity. When the leash fires, the pull home mostly
+      // OPPOSES where he is going, so it brakes: measured speed fell from 0.45 to
+      // 0.07 m/s, and at the bottom of that the heading is noise, so he stopped
+      // and spun on the spot — 367 pivot frames in five minutes. Which is exactly
+      // the thing a cat never does.
+      //
+      // So: take only the DIRECTION steering asked for, turn toward it no faster
+      // than the arc allows, and walk at a constant speed. The radius of his path
+      // is then speed / turnRate = the arc radius, by construction rather than by
+      // hoping the forces work out.
+      const v = vehicle.velocity;
+      v.y = 0;
+      if (v.x * v.x + v.z * v.z > 1e-8) {
+        const want = Math.atan2(v.x, v.z);
+        if (travelDir === null) travelDir = want;
+        let da = want - travelDir;
+        while (da >  Math.PI) da -= 2 * Math.PI;
+        while (da < -Math.PI) da += 2 * Math.PI;
+        const maxDa = vehicle.maxTurnRate * dt;
+        travelDir += THREE.MathUtils.clamp(da, -maxDa, maxDa);
+        v.set(Math.sin(travelDir) * roamSpeed, 0, Math.cos(travelDir) * roamSpeed);
+      }
+
+      // Leash. Zero inside the circle so the path there is pure wander, ramping
+      // in over the next couple of metres rather than switching on like a wall —
+      // a hard cut-in reverses him through 180 degrees, which is both unnatural
+      // and the numerically nastiest case for orienting toward a target.
+      // A firm pull is safe now: the turn-rate cap above means a strong leash can
+      // only make him commit to the arc sooner, never snap round.
+      //
+      // It is a SOFT boundary and always will be. Measured over five minutes, a
+      // 5 m leash gives a roughly 8.7 m roam — he cannot turn tighter than the arc
+      // radius, so he must overshoot, and the moment he crosses back inside the
+      // circle the leash releases and wander is free to aim him out again.
+      // Raising the gain from 0.8 to 4 moved the maximum only 9.4 m -> 8.7 m,
+      // because the turn rate is what binds, not the strength of the pull. Size
+      // the circle for where you want him, not where you want the fence.
+      const d = Math.hypot(vehicle.position.x, vehicle.position.z);
+      const over = Math.max(0, d - ROAM_R);
+      homeSeek.weight = Math.min(over * 4, 12);
+
+      // The one place the two systems touch: travel speed drives clip rate.
+      // Matched correctly, a paw stays planted on one grid line as it passes.
+      const spd = vehicle.getSpeed();
+      if (spd > MOVE_EPS) {
+        play('walk');
+        if (actions.walk) {
+          actions.walk.setEffectiveTimeScale(
+            THREE.MathUtils.clamp(spd / stride, 0.35, 2.5));
+        }
+      } else {
+        play('idle_1');
+      }
+
+      readoutT += dt;
+      if (readout && readoutT > 0.15) {       // 6 Hz — per-frame DOM writes are wasted work
+        readoutT = 0;
+        readout.textContent =
+          `${spd.toFixed(2)} m/s · ${d.toFixed(1)} m out · rate ${(spd / stride).toFixed(2)}`;
+      }
+    }
+
+    // ── loop ────────────────────────────────────────────────────────
+    const clock = new THREE.Clock();
+    // dt from successive elapsed values, NOT clock.getDelta() — getElapsedTime()
+    // consumes the delta internally, so getDelta() would return ~0 here and the
+    // fly camera would silently never move.
+    let prevT = 0;
+    renderer.setAnimationLoop(() => {
+      const t = clock.getElapsedTime();
+      const dt = Math.min(t - prevT, 0.1); prevT = t;
+      if (fly) fly.update(dt);        // before controls.update() so damping settles
+      if (wanderOn) stepWander(dt);   // before the mixer: it picks the clip and its rate
+      if (mixer) mixer.update(dt);
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    window.__scene = scene;   // debug handles, same as the other loops
+    window.__T = THREE;
+    window.__camera = camera; // needed to project a world point to screen in checks
+    window.__play = play;
+    window.__step = stepWander;                 // step the sim by hand for scripted checks
+    window.__yuka = () => ({ vehicle, wander, homeSeek, roamSpeed, turnR, stride });
+  </script>
+</body>
+</html>

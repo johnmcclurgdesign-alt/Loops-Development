@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>→ current loop</title>
+  <style>
+    /* Gallery palette, so the half-second it is on screen doesn't flash white. */
+    html, body { margin: 0; height: 100%; background: #0b0e14; color: #8b93a7;
+                 font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; }
+    main { height: 100%; display: grid; place-content: center; text-align: center; gap: 10px; }
+    a { color: #6ea8fe; }
+    code { color: #c9a227; }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Opening the current loop…</p>
+    <p><a id="go" href="../loops/factory-rt/index.html">open it now</a></p>
+  </main>
+
+<script>
+  // The bookmark. Loops get superseded — `factory` and `dust-and-light` were deleted on
+  // 2026-08-17 and every saved link into them died with them. This page exists so that
+  // never costs anyone anything again: bookmark /now/ and it follows the work.
+  //
+  // ★ WHEN THE CURRENT SCENE CHANGES, EDIT THIS ONE LINE AND NOTHING ELSE.
+  const TARGET = '../loops/factory-rt/index.html';
+
+  const url = new URL(TARGET, location.href);
+
+  // No dev/review flag is added any more: the panel is on by default and probes for itself
+  // whether it can write into the repo or only copy to the clipboard. Setting it here would
+  // be a second opinion about the same question, and the two would eventually disagree.
+
+  // Anything hung off the bookmark wins, so /now/?look=painterly&exp=3 still works — and so
+  // does /now/?fb=0 if you want the panel out of the way.
+  for (const [k, v] of new URLSearchParams(location.search)) url.searchParams.set(k, v);
+  url.hash = location.hash;
+
+  document.getElementById('go').href = url.href;
+  // replace(), not assign(): with assign, Back from the loop lands here and bounces you
+  // straight forward again, so you can never get back to where you came from.
+  location.replace(url.href);
+</script>
+</body>
+</html>
