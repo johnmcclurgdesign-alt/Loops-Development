@@ -85,6 +85,45 @@ second try. **webxr-island-family.vercel.app** and **sebastien-lempens.com** *(n
 
 ---
 
+## Code references — added 2026-08-16
+
+Repos rather than sites, and a different kind of entry: **read from their READMEs, not run.**
+Nothing below has been opened in a browser here, so treat the descriptions as their claims,
+not as things I watched work.
+
+**Both are WebGPU.** Our loops render through three.js's default **WebGL2** renderer, off a
+CDN importmap with no build step. three does ship a separate `WebGPURenderer`, but moving to
+it is a renderer swap, not an import — every custom `ShaderMaterial` we have (sky, shafts,
+and all thirteen looks) is GLSL and would need rewriting in WGSL. So these are **ground truth
+and technique to read**, the same posture as `three-gpu-pathtracer` and Ossos in HANDOFF.md —
+not things to drop in.
+
+### [jure/webgiya](https://github.com/jure/webgiya) — surfel-based global illumination
+WebGPU + three.js, MIT, ~144 stars, 19 commits. A demo with a live page and a technical
+write-up, not a library. Fully compute-driven: G-buffer → surfel allocation → integration →
+resolve, with BVH ray tracing, spatial hash grids and moment-based visibility, using a
+vendored `three-mesh-bvh` for the ray queries.
+
+**Why this one matters to us specifically.** It is the *dynamic* answer to the exact problem
+we solved by baking. Our factory lighting is a 4K lightmap out of Blender — superb for a room
+that never changes, and completely blind to anything that moves through it. The cat currently
+walks through that room receiving none of its bounce, and picks up nothing from the window
+shafts. Surfel GI is the technique that would fix that. Worth reading before we decide how
+much of the factory's light the cat should actually respond to.
+
+### [s-macke/WebGPU-Lab](https://github.com/s-macke/WebGPU-Lab) — WGSL compute cookbook
+WebGPU + WGSL, TypeScript + Vite, MIT, ~50 stars, 77 commits. A collection of self-contained
+demos, most ported from Shadertoy GLSL: GI raytracing (from smallpt), protean clouds,
+voronoise, FBM, signed distance fields, fluid simulation, and 2D light propagation via
+circular harmonics.
+
+**Read it for the shaders, not the code.** The Vite/TypeScript build makes the repo itself
+un-importable here, and its demos being *ports from GLSL* is the useful part — the maths
+travels back the other way too. The light-propagation and fluid pieces are the ones with
+obvious uses for us (drifting steam, brine in the vats).
+
+---
+
 ## What to steal, concretely
 
 1. **Ship a `lil-gui` panel in every scene.** Palette, fog density, bloom, grain, exposure,

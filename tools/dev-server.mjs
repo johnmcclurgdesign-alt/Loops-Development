@@ -94,6 +94,36 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  // Update an existing note — this is how a note gets closed off. Separate from the POST
+  // above, which only ever APPENDS: a reviewer filing feedback and someone working through
+  // it are different jobs, and conflating them is how you accidentally overwrite a note
+  // while trying to tick it off. Only status and resolution are writable; the note's own
+  // record of what was seen (object, camera, screenshot) is never edited after the fact.
+  if (url.pathname === '/api/feedback/update' && req.method === 'POST') {
+    try {
+      const { id, status, resolution } = JSON.parse((await readBody(req)).toString('utf8'));
+      const notes = await loadNotes();
+      const note = notes.find((n) => n.id === id);
+      if (!note) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'no such note: ' + id }));
+        return;
+      }
+      if (status !== undefined) note.status = status;
+      if (resolution !== undefined) note.resolution = resolution;
+      note.updated = new Date().toISOString();
+
+      await writeFile(NOTES, JSON.stringify(notes, null, 2) + '\n', 'utf8');
+      console.log(`  ✓ ${id}  ${note.status}${note.resolution ? '  —  ' + note.resolution.slice(0, 60) : ''}`);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, note }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));
+    }
+    return;
+  }
+
   // ---- static files -------------------------------------------------------
   let p = decodeURIComponent(url.pathname);
   if (p.endsWith('/')) p += 'index.html';

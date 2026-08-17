@@ -118,6 +118,14 @@ export function restoreView({ scene, camera, controls }) {
 // pickRoot: raycast against this instead of the whole scene. Pass the loaded
 // glTF root so atmosphere helpers (light shafts, dust, sky) are never selectable —
 // they have no Blender names and would just report "(unnamed mesh)".
+//
+// Two opt-outs the SCENE sets, on the object or any ancestor:
+//   userData.noPick — not selectable at all (used internally for the gizmos)
+//   userData.noMove — selectable and commentable, but no handles. For anything the
+//                     scene drives rather than an artist places: a steered character,
+//                     something on a path. Its transform is an output, so a dragged
+//                     pose is not a suggestion — it is a value that gets overwritten,
+//                     or silently persisted as an offset nothing ever corrects.
 export function initFeedback({ scene, camera, renderer, controls, pickRoot = null, loop = 'scene' }) {
   // Captured FIRST, before anything in here can move the camera: the scene has just
   // finished pointing it down the glTF camera's own forward axis, so this is the shot
@@ -519,6 +527,22 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
   const STORE_KEY = `fbk-edits:${loop}`;
   let restoring = false;
 
+  // Objects whose transform the scene owns, marked by the scene with
+  // `userData.noMove` — the same opt-out idiom as `userData.noPick` above, one step
+  // weaker: pickable and commentable, just not draggable.
+  //
+  // The flag is checked on an object AND its ancestors, because what gets picked is
+  // the mesh INSIDE the driven node, not the node itself. The cat is a SkinnedMesh
+  // inside a Group whose matrix the steering writes every frame; dragging the mesh
+  // offsets it within that group, so the steering carries on driving the group while
+  // the cat renders somewhere else entirely. It survives a reload too, since the edit
+  // is stored by node path and replayed on load, and nothing in the sim ever puts it
+  // back — the only clue is a cat that is quietly in the wrong place forever.
+  function locked(obj) {
+    for (let n = obj; n; n = n.parent) if (n.userData?.noMove) return true;
+    return false;
+  }
+
   function pathOf(obj) {
     const root = pickRoot || scene;
     const path = [];
@@ -552,6 +576,7 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
     try {
       const items = [];
       for (const [obj, start] of origins) {
+        if (locked(obj)) continue;                       // scene-driven — its pose is not ours to keep
         if (!offset(obj)) continue;                      // back where it started — nothing to keep
         const path = pathOf(obj);
         if (!path) continue;
@@ -564,7 +589,7 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
 
   /** @returns {number} how many edits came back. */
   function restore() {
-    let n = 0;
+    let n = 0, dropped = 0;
     try {
       const raw = localStorage.getItem(STORE_KEY);
       if (!raw) return 0;
@@ -576,9 +601,23 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
         // The name check is the guard against a re-exported .glb whose node order moved:
         // rather than silently dragging the wrong prop, that edit is dropped.
         if (!obj || nameOf(obj) !== it.name) continue;
+        // Also drop anything the scene now drives. This is what heals a session that
+        // stored one of these before the object was locked — leave it in and the stale
+        // offset comes back on every single load with nothing to correct it.
+        if (locked(obj)) { dropped++; continue; }
         origins.set(obj, arrPose(it.start));
         applyPose(obj, arrPose(it.now));
         n++;
+      }
+      // Prune what we refused, so a stale locked edit is gone for good instead of
+      // being skipped on every load forever.
+      if (dropped) {
+        const keep = data.items.filter((it) => {
+          const o = objAtPath(it.path);
+          return o && nameOf(o) === it.name && !locked(o);
+        });
+        if (keep.length) localStorage.setItem(STORE_KEY, JSON.stringify({ ...data, items: keep }));
+        else localStorage.removeItem(STORE_KEY);
       }
     } catch { /* corrupt entry — start clean rather than fail to boot */ }
     restoring = false;
@@ -667,6 +706,12 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
       if (next !== 'none') preferred = next;
     }
     tool = selection.length ? next : 'none';
+    // Something in the selection is driven by the scene rather than authored — a
+    // simulated character, anything on a path. Its transform is an OUTPUT, so a
+    // dragged pose is not a suggestion, it is a value that gets overwritten on the
+    // next frame or, worse, persists as a permanent offset the sim never corrects.
+    // Still fully selectable: writing a note about him is the point of the panel.
+    if (selection.some(locked)) tool = 'none';
     // With nothing picked, show what the NEXT pick will arm rather than a flat "preview" —
     // otherwise the panel claims a mode the user did not choose.
     const shown = selection.length ? tool : (lookOnly ? 'none' : preferred);

@@ -28,11 +28,159 @@ cd "C:/Users/dexte/Desktop/Loops Pickle Factory/The Dripping Pickle - 3JS" && no
 
 ---
 
-## ⭐ Next task: a three.js cat with a walk cycle
+# Session log — 2026-08-16 (bake day). READ THIS FIRST.
 
-**The ask:** "a 3js version of our cat, at least enough to give him a walk cycle."
+## Where the repo actually stands
 
-**What was established before the session ended** (inspected `Cat_PF.blend` headless):
+On branch **`realtime-lighting`**, not `main`. **Nothing has been pushed**, so the live
+GitHub Pages site is still the old build.
+
+Committed today:
+
+| commit | what |
+|---|---|
+| `6176ce2` | Yuka + Ossos notes for the cat (see the cat section below) |
+| `fb77425` | the re-baked lightmap + the bake traps in `CLAUDE.md` |
+
+**Still uncommitted, and this is the thing to deal with first:**
+
+- `assets/factory/factory.glb` — 50 MB, re-exported 10:56. **The lightmap is committed and the
+  glb it belongs to is not**, so the repo is currently in a split state. Commit them together
+  or the next person gets a mismatch that looks like a bake bug.
+- `tools/flycam.js` — **untracked and fully documented in `CLAUDE.md`.** It would vanish with
+  the folder. Highest-risk file in the tree.
+- `loops/{factory,factory-rt,dust-and-light}/index.html` — the flycam wiring (+30 lines), which
+  imports `tools/flycam.js`. Commit these *with* flycam or the loops break on a fresh clone.
+- `feedback/notes.json` + `feedback/shots/` — 8 open notes, see below.
+
+## Why the .glb doubled, 23 MB → 50 MB (answered — it is correct, do not "fix" it)
+
+Two unrelated causes, both intended, measured by parsing the container's JSON chunk:
+
+| | old (committed) | new (10:56) |
+|---|---|---|
+| images | **16, all WebP**, 17.6 MB | **21 JPEG + 2 PNG**, 31.4 MB |
+| geometry etc | 5.5 MB | **18.5 MB** |
+| meshes / nodes / materials | 75 / 76 / 21 | **251 / 471 / 30** |
+
+1. **+13.8 MB is the texture correctness fix.** The old build's WebP is the documented bug —
+   linear values written into an sRGB-tagged file, a **+0.2515** additive lift. Correct JPEGs
+   are simply bigger. `CLAUDE.md` predicted ~47.9 MB for this recipe; we landed at 50.2 MB.
+2. **+13 MB is the scene actually being complete.** 75 meshes → 251, which lines up with the
+   252 mesh objects the bake covered. The old export was a fraction of the room.
+
+**Two export traps verified clean on the new file, so don't re-check blind:**
+- exactly one camera, `Cam_Loop_01` (the two-camera trap)
+- `modular_factory_facade_windows` carries `baseColorFactor = [0.0575, 0.0857, 0.045, 1.0]` —
+  the green trim patch **was** re-run after this export. It must be re-run after every export.
+
+## The bake — verified, one object fixed
+
+63.97% → **64.10% lit**, no NaN, no negatives, margin 3 px, lightmap in UV slot 1 everywhere.
+Browser confirms **265 meshes / 265 lightmapped**.
+
+`cornice03_standard_standard_01.017` had been silently skipped — a 107×314 patch of pure black.
+Re-baked alone with `use_clear` off: **0.0% → 62.7%**, with its twin `.016` holding at 57.7% as
+the control proving the rest of the atlas survived. Full trap list is in `CLAUDE.md`.
+
+## Open feedback notes — several may already be closed by today's work
+
+All 8 are still `"status": "open"` in `feedback/notes.json`. **Re-check these against the new
+build before doing any work on them** — three look already answered:
+
+| note | object | says | likely status now |
+|---|---|---|---|
+| n003 | `wall_standard_standard_01.011` | "white glow around wall and door. Could be uv islands bleading in to each other?" | **probably FIXED** — that is the white-outline bug, margin was 16 px against a gap of 8; it is 3 px now. Verify in the new build, then close. Note this object still samples at only 7.7% lit. |
+| n007 | `Cube169_1` | "Widow trim color (green) not displaying" | **probably FIXED** — `baseColorFactor` confirmed present in the new glb. |
+| n008 | `Column005` | "The concrete columns are black now." | **explained, not a bug** — `CLAUDE.md` documents this exactly: correct textures make genuinely dark materials (columns source mean 0.11 vs brick 0.40) read near-black. This is a grading call, not a defect. Needs an art decision, not a fix. |
+| n004 | `Cube001` | door "very splotchy", wants a higher-res bake for specific elements | open — real work |
+| n005 | `Rack_1001` | "lose the heavy ping and bake the shelves way down" | open — real work |
+| n006 | `Raidiator_01` | "textures are not rendering properly across the radiator pieces" | open — real work |
+| n002 | `wall_standard_standard_01.005` | user flagged as a test, lightmap stuff "later" | low priority |
+| n001 | — | test note | can be deleted |
+
+## What to come back to, in order
+
+1. **Commit the glb + flycam + loop html together.** Split state is the active hazard.
+2. **Re-check n003 / n007 / n008 against the new build and close what is done.** Cheap, and it
+   shrinks the list from 8 to 5 before anyone starts real work.
+3. **Push.** Nothing is live. Also decide whether `realtime-lighting` merges to `main` or stays
+   an experiment — see the branch section further down.
+4. **Re-fit the grade.** `CLAUDE.md` is explicit that `EXPOSURE 5.0` was fitted against the
+   *brightened* textures, so it is now wrong by construction. Re-fit against
+   `reference/dp_lighting_reference.png`, **not** against memory of the old build, and note a
+   plain exposure multiply cannot reproduce the old look — the bug was additive in linear.
+   n008 (black columns) is the same conversation; do them together.
+5. ~~**The cat.** Rig decision is still open.~~ **DONE 2026-08-16 and frozen deliberately** —
+   built, proved, stopped. `SK_Cat` is dead; it is the Fab cat. See the cat section below.
+6. **Low priority:** 80 objects sampled 5–50% lit. Almost all are correct for a dim interior —
+   `CLAUDE.md` explains how to tell a real miss from a shadow before anyone panics about it.
+
+---
+
+## The cat — BUILT, PROVED, AND FROZEN 2026-08-16
+
+**Do not treat this as an open task.** It was stopped on purpose, at a working state, because
+it had answered what it was built to answer. The user's words: *"This proved everything I
+needed to know and it's going to work perfectly."*
+
+**The rig decision is CLOSED. `SK_Cat` is dead** — the user's own rig is not being used. It is
+the Fab **"Cats – Simple"** pack, already in the UE project at `/Game/Cat_Simple/`.
+⚠ It is a **$30 Fab asset and this repo deploys publicly to GitHub Pages**, so the licence is
+still worth reading before anything ships to Pages. That has not been done.
+
+### What exists
+
+`loops/cat-test/` — a deliberately plain scene: neutral ground, a **one-metre grid** to measure
+foot skate against, a rim light for silhouette, fly camera and the feedback panel. Opens with
+wander OFF because it is a clip-inspection scene first; `?wander=1` starts him moving.
+
+`assets/cat/` — **11 MB**: `cat.glb` 2.9 MB (mesh + normal map only), 43 animation clips
+6.6 MB, 6 fur coats 1.2 MB. Animation is now the bulk, not textures.
+
+Straight out of UE 5.8's glTF exporter — **no Blender round-trip**. Every trap in that pipeline
+is written up in `CLAUDE.md` under "Unreal → web (the cat)" and "Steering the cat — Yuka";
+read those before re-exporting anything, they cost a day between them.
+
+### What was proved (measured, not eyeballed)
+
+- Bone names survive UE → glTF **51/51**, so one clip file binds to a separately exported mesh.
+- Scale is right: 0.14 × 0.45 × 0.78 m, root bone on the floor.
+- Steering produces **cat-like arcs, not pivots** — 0 pivot frames over 5 simulated minutes,
+  tightest arc 0.55 m against 0.55 configured, peak turn 46.9°/s against a 46.9 cap, slip
+  between facing and moving 0.0°, speed constant.
+- Turn direction is balanced (48 left / 41 right) after the meander fix.
+
+### Where to pick it back up: rests
+
+He has 43 clips and only ever walks. The design was agreed but **not built**:
+
+1. **A clip sequencer — this is the actual work.** A rest is a chain
+   (`sit_start → sit_loop ×N → sit_end`), and nothing in three.js sequences that. The hook is
+   the mixer's `finished` event. Build this first, with **sit only**: if one chain reads
+   cleanly the rest are table entries, and if it does not you have found out cheaply.
+2. **A hand-rolled state picker.** Not Yuka's `StateMachine` — that decides *states*, and the
+   hard part here is *chains*, which it knows nothing about.
+3. **★ One rule that must not be broken.** Constant speed is what killed the stop-and-spin bug,
+   so the fix is not to revert it: **steering may only turn him; only the state machine may
+   change his pace.** It sets a target speed and he eases toward it.
+
+Starting rhythm to argue with: walking 40%, standing 15%, sitting 15%, lying/dozing 25%,
+grooming 5%. **Rest lengths must vary a lot** — a cat that sits for exactly eight seconds every
+time reads as scripted no matter how good the clip is.
+
+**Deliberately left out:** cats rest *somewhere* — the warm spot, the high spot, out of the way
+— and there is nowhere to choose in a grey test room. Build the mechanism now, wire it to real
+places when he moves into the factory. Nothing gets thrown away.
+
+### Still unread from the pack
+
+170 clips exist; 43 are in. Unused and worth knowing about: **29 jump clips** (12 taken —
+he could get *onto* crates, which is a different scene rather than a different clip),
+**16 crouch/stalking**, 19 swim, 21 combat, and the walk/trot/run direction matrices we skip
+because he always walks forward and arcs.
+
+### Superseded — kept only because it explains why `SK_Cat` was ever a candidate
 
 `C:\Users\dexte\Desktop\Loops Pickle Factory\Assets_Created\Cat_PF.blend` holds **two rigs
 and zero animations** (`bpy.data.actions` is empty):
@@ -44,24 +192,99 @@ and zero animations** (`bpy.data.actions` is empty):
 
 Textures are packed (`CAT_TEX_C` 2048, `EyeV2_C` 1024, `WHITE_MASK` 512).
 
-**THE DECISION THE USER STILL HAS TO MAKE — ask before building:**
-
-- **Their own `SK_Cat`** — fully theirs, no licence question, but **no animation exists**, so
-  the walk has to be authored (procedurally in Blender, or driven in three.js at runtime).
-- **The Fab "Cats – Simple" cat** — 51-bone skeleton, proven `Walk_F_RM` clip already
-  debugged extensively in UE, exportable to GLB in one step. But it is a $30 Fab asset and
-  this repo deploys publicly to GitHub Pages, so the licence is worth a look.
-
-Claude's recommendation at the time: take the Fab cat first to prove the pipeline in a day,
-swap in `SK_Cat` later. **Nothing was built — no export was run, deliberately.**
-
-A ready-to-run headless GLB exporter for `SK_Cat` was drafted but not executed. Re-derive it
-if needed; the shape is `bpy.ops.export_scene.gltf(use_selection=True, export_yup=True,
-export_apply=True, export_skins=True, export_animations=False)` on `root` + `SK_Cat`, with
-`hide_render` cleared first (a hidden object silently vanishes from a glTF export).
+**~~THE DECISION THE USER STILL HAS TO MAKE~~ — DECIDED 2026-08-16: the Fab cat.**
+`SK_Cat` is dead. It had no animation and would have needed a walk authored from scratch; the
+Fab pack arrived with 170 clips. The drafted headless `SK_Cat` glTF exporter was never run and
+is not needed — nothing goes through Blender on this path any more.
 
 Relevant memory: `cat-npc-motion-matching` — very long, and it carries the full history of
 the UE cat including the motion-matching bugs. Read it before touching the UE side.
+
+### SHIPPED — [Yuka](https://github.com/Mugen87/yuka) drives him (collected and adopted 2026-08-16)
+
+> Kept as written because the reasoning still holds, but this is no longer a candidate: it is
+> in `loops/cat-test/` off jsDelivr, in the importmap, no build step. What it actually took to
+> make it behave — the priority-order trap, forces vs weights, and why constant speed matters —
+> is in `CLAUDE.md` under "Steering the cat — Yuka". Read that, not just this.
+
+Game-AI library by **Mugen87**, a three.js core maintainer — so it is built against our stack
+by someone who works on it. MIT, **zero dependencies**, ships an ES module build, so it drops
+into an importmap with no build step:
+
+```
+https://cdn.jsdelivr.net/npm/yuka@0.7.8/build/yuka.module.js   (443 KB unminified)
+```
+
+**Split the job before evaluating it.** Yuka decides *where the cat goes and when it changes
+its mind*. It does not move a single bone — the walk cycle is still glTF clips on an
+`AnimationMixer`. Two separate problems; Yuka only solves the first. Feeding the cat's Yuka
+speed into the walk clip's `timeScale` is what keeps the feet from skating.
+
+What it carries that maps onto the known UE cat failures (`CLAUDE.md`, Handoff §9):
+
+- **Obstacle avoidance + a real navmesh.** The UE cat walks through walls because
+  `CatWanderBehavior` never consults nav at all — it just faces a direction and pushes. Yuka
+  constrains movement to the mesh instead of steering advisorily. This is the headline reason
+  to look at it.
+- **`WanderBehavior` on a proper vehicle model** — replaces the hand-rolled arc/commit logic
+  whose 90° sweeps and blind `HeadingCommitDistance` walks *are* the wall-walking.
+- **`StateMachine`** — idle → walk → sit → sleep. This is what makes him read as a cat rather
+  than a roomba, and it is the part with no UE equivalent worth porting.
+- Also has perception (vision, short-term memory), triggers, fuzzy logic, goal-driven agents,
+  and JSON serialisation. All likely overkill for a loop; do not let the feature list set the
+  scope.
+
+**The catch: last published 2022-09-17 (v0.7.8), quiet ever since.** Not disqualifying —
+no dependencies means nothing rots out from under it — but nobody is fixing a bug we find.
+Weigh that against hand-writing steering behaviours, which is roughly a week.
+
+**Nothing has been built or installed.** The next step, if chosen, is a throwaway
+`loops/cat-test/` with a *cube* wandering the factory floor — prove Yuka drives something
+sensibly around the real geometry before committing the actual cat and a rig decision to it.
+
+### Candidate for the cat's *legs* — [Ossos](https://github.com/sketchpunklabs/ossos) (collected 2026-08-16)
+
+Web character-animation system by **sketchpunklabs**. TypeScript, MIT, three.js examples in
+the repo. This is the **other half of the Yuka split above** — Yuka decides where the cat
+goes, Ossos is about how the body moves once it gets there. Neither replaces the other.
+
+```
+https://cdn.jsdelivr.net/npm/ossos@0.0.3/dist/ossos.es.js   (110 KB)
+```
+Not dependency-free like Yuka — needs `gl-matrix`, so the importmap gains a second entry.
+Still no build step.
+
+The three things in it that would actually matter to a cat:
+
+- **IK solvers** (Aim, SwingTwist, Limb, FABRIK, CCD, +). The prize is **foot planting** —
+  paws meeting the floor instead of floating above or sinking through it, which is the tell
+  that separates a real walk from a clip playing on a sliding object.
+- **Bone springs (rotation + translation).** Tail and ear follow-through for free. On a cat
+  this is disproportionately valuable — the tail is most of the personality, and hand-keying
+  secondary motion is exactly the work we do not want.
+- **Animation retargeting for similar skeletal meshes.** Worth noting against the open rig
+  decision above: this is in principle the bridge that puts the Fab cat's proven `Walk_F_RM`
+  onto our own `SK_Cat`. Temper it heavily though — the README says *basic* and *similar*,
+  and 23 bones vs 51 bones is not similar. Do not treat this as a solved path.
+
+**Rate this well below Yuka. Four separate signals say early:**
+
+- npm is at **v0.0.3, published 2022-03-03**. Version zero-point-zero-point-three.
+- `main` has not moved since **2023-03-30**.
+- There is an `ossos_next` branch — i.e. an in-flight rewrite — last touched **2025-11-19**,
+  so the stable branch is the abandoned one and the live branch is unreleased.
+- **Quadruped IK is explicitly marked *"Prototype Phase"* in the README.** The cat is a
+  quadruped. The one feature we would lean on hardest is the one the author flags as
+  unfinished. That is the sentence that should decide this, not the feature list.
+
+**And the alternative is closer than it looks:** three.js already ships `CCDIKSolver` at our
+pinned 0.169.0 (`three/addons/animation/CCDIKSolver.js`, verified 200 on the CDN), and bone
+springs are a short hand-rolled damped-spring on a couple of tail bones. So unlike Yuka —
+where the alternative was writing steering behaviours from scratch — Ossos is not load-bearing.
+
+**Suggested posture: read it, don't depend on it.** MIT, so the solvers and the spring maths
+can be lifted directly into `tools/` if we want them, without inheriting a v0.0.3 dependency
+on a library mid-rewrite. Revisit properly if `ossos_next` ever ships.
 
 ---
 

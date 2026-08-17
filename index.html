@@ -29,18 +29,48 @@
     .desc { color: var(--soft); font-size: 14px; }
     .tag { display: inline-block; margin-top: 14px; font-size: 11px; letter-spacing: .14em;
            text-transform: uppercase; color: var(--accent); }
+    .foot { margin: 40px 0 0; color: var(--soft); font-size: 14px; max-width: 1100px;
+            border-top: 1px solid var(--line); padding-top: 20px; }
   </style>
 </head>
 <body>
   <h1>Loops</h1>
-  <p class="lede">Real-time scenes that run in a browser. Open one on any screen — no install, no download.</p>
+  <p class="lede">Real-time scenes that run in a browser. Open one on any screen — no install, no
+  download. Add <code>?review=1</code> to any of them to click an object and leave a note; it copies
+  the note plus a link back to the exact camera angle you were looking from.</p>
 
   <div class="grid">
+    <a class="card" href="loops/factory/">
+      <div class="name">The Dripping Pickle</div>
+      <div class="desc">The factory interior. Lighting is baked to a 4K map in Blender, so the
+      shadows and bounce are the real thing rather than an approximation. 265 objects, 428k
+      triangles. Thirteen stylised looks in the panel, bottom-left.</div>
+      <span class="tag">Main scene</span>
+    </a>
+
+    <a class="card" href="loops/cat-test/?wander=1">
+      <div class="name">The Cat</div>
+      <div class="desc">43 animation clips and six coats, wandering on his own. He is steered
+      rather than following a path — so he arcs round like a cat instead of turning on the spot.</div>
+      <span class="tag">Character test</span>
+    </a>
+
     <a class="card" href="loops/dust-and-light/">
       <div class="name">Dust and Light</div>
       <div class="desc">Look test. Light shafts, drifting dust, baked-feel shadows — atmosphere only, no custom models yet.</div>
       <span class="tag">Look test</span>
     </a>
+
+    <a class="card" href="loops/factory-rt/">
+      <div class="name">Factory — real-time lighting</div>
+      <div class="desc">The whole factory lit live, with no bake in Blender. Bounce light comes
+      from a grid of 924 probes measured inside the building itself, and shadows sharpen where
+      objects touch the floor and soften with distance. Move the sun and the room follows.</div>
+      <span class="tag">Real-time GI</span>
+    </a>
   </div>
+
+  <p class="foot"><a href="feedback/">Feedback tracker</a> — every note left on a loop and
+  whether it has been dealt with. Read-only here; run the dev server to tick things off.</p>
 </body>
 </html>

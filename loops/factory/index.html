@@ -32,6 +32,7 @@
     import { RGBELoader }   from 'three/addons/loaders/RGBELoader.js';
     import { OrbitControls} from 'three/addons/controls/OrbitControls.js';
     import { createLooks } from '../../tools/looks.js';
+    import { createFlyCam } from '../../tools/flycam.js';
 
     // ── grade — these are the numbers we tune to match the Cycles reference ──
     // Blender was ACES 1.3, exposure 2.5, gamma 1.3. three.js ACES is only an
@@ -326,6 +327,7 @@
     camera.position.set(-12, 2, 0);
 
     let controls;
+    let fly;
 
     const state = { meshes: 0, withLM: 0, tris: 0, cam: 'fallback' };
 
@@ -529,9 +531,13 @@
         controls.target.copy(camera.getWorldPosition(new THREE.Vector3()).add(fwd.multiplyScalar(12)));
         controls.update();
 
+        fly = createFlyCam({ camera, controls });
+        window.__fly = fly;
+
         hud.textContent =
           `meshes ${state.meshes}  lightmapped ${state.withLM}  tris ${Math.round(state.tris).toLocaleString()}\n` +
-          `camera ${state.cam}  exposure ${EXPOSURE}  lm ${LM_INTENSITY}`;
+          `camera ${state.cam}  exposure ${EXPOSURE}  lm ${LM_INTENSITY}\n` +
+          fly.hint;
 
         if (FEEDBACK) {
           import('../../tools/feedback.js').then(({ initFeedback }) => {
@@ -543,8 +549,14 @@
     }, undefined, (e) => { hud.textContent = 'HDR FAILED: ' + e; });
 
     const clock = new THREE.Clock();
+    // Derive dt from successive elapsed values rather than clock.getDelta() —
+    // getElapsedTime() already consumes the delta internally, so calling
+    // getDelta() here would return ~0 and the fly camera would never move.
+    let prevT = 0;
     renderer.setAnimationLoop(() => {
       const t = clock.getElapsedTime();
+      const dt = t - prevT; prevT = t;
+      if (fly) fly.update(dt);          // before controls.update() so damping settles on the new target
 
       for (let i = 0; i < shaftMats.length; i++) shaftMats[i].uniforms.uTime.value = t + i * 1.7;
 

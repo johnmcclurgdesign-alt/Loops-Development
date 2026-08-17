@@ -1,0 +1,583 @@
+[
+  {
+    "id": "n001",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-14T23:27:14.911Z",
+    "object": "Sign_DrippingPickle",
+    "material": "M_Sign_DrippingPickle",
+    "point_blender": [
+      3.437,
+      -1.002,
+      0.421
+    ],
+    "comment": "test test test. Hello claude i'm John",
+    "camera": {
+      "position": [
+        -9.984,
+        0.053,
+        0.622
+      ],
+      "fov": 38.96,
+      "aspect": 1.7669,
+      "target": [
+        1.993,
+        -0.011,
+        -0.124
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-9.984%2C0.053%2C0.622&tgt=1.993%2C-0.011%2C-0.124&sel=Sign_DrippingPickle&review=1",
+    "shot": "shots/n001.jpg",
+    "resolution": "test note, not a real issue",
+    "updated": "2026-08-17T04:08:39.894Z"
+  },
+  {
+    "id": "n002",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-15T01:02:52.751Z",
+    "object": "wall_standard_standard_01005",
+    "objects": [
+      "wall_standard_standard_01005"
+    ],
+    "material": "modular_factory_facade_brick",
+    "point_blender": [
+      3.442,
+      -0.663,
+      -2.025
+    ],
+    "edits": [],
+    "comment": "Hey Claude, this is just a test we'll tackle the lightmap stuff later but this is the wall texture that has some weird highlights on it. Probably happened during the bake.",
+    "camera": {
+      "position": [
+        -10.164,
+        -0.068,
+        4.075
+      ],
+      "fov": 38.37,
+      "aspect": 1.7962,
+      "target": [
+        1.52,
+        -0.826,
+        2.722
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-10.164%2C-0.068%2C4.075&tgt=1.52%2C-0.826%2C2.722&sel=wall_standard_standard_01005&review=1",
+    "shot": "shots/n002.jpg",
+    "resolution": "Superseded, not fixed. This is a lightmap artefact and was filed against the baked loop (loops/factory/), which is unchanged. The real-time loop does not use the lightmap at all, so the highlight cannot occur there. Reopen against loops/factory/ if the baked scene is still shipping.",
+    "updated": "2026-08-17T04:26:21.645Z"
+  },
+  {
+    "id": "n003",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T15:22:16.314Z",
+    "object": "wall_standard_standard_01011",
+    "objects": [
+      "wall_standard_standard_01011"
+    ],
+    "material": "modular_factory_facade_brick",
+    "point_blender": [
+      -4.832,
+      3.944,
+      -1.391
+    ],
+    "edits": [],
+    "comment": "white glow around wall and door. Could be uv islands bleading in to each other?",
+    "camera": {
+      "position": [
+        -8.6,
+        0.691,
+        7.837
+      ],
+      "fov": 38.37,
+      "aspect": 1.7962,
+      "target": [
+        -5.555,
+        -0.13,
+        2.907
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-8.6%2C0.691%2C7.837&tgt=-5.555%2C-0.13%2C2.907&sel=wall_standard_standard_01011&review=1",
+    "shot": "shots/n003.jpg",
+    "resolution": "Superseded, not fixed. Same as n002 — filed against the baked loop. The cause is known and documented: the bake margin was larger than half the pack gap (16px margin, 8px gap), so neighbouring UV islands flooded into each other, which is exactly the white outline described. Real-time does not use the lightmap.",
+    "updated": "2026-08-17T04:26:21.722Z"
+  },
+  {
+    "id": "n004",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T15:24:14.302Z",
+    "object": "Cube001",
+    "objects": [
+      "Cube001"
+    ],
+    "material": "modular_factory_facade_brick_doors",
+    "point_blender": [
+      -5.777,
+      4.052,
+      -1.562
+    ],
+    "edits": [],
+    "comment": "Can we bake high resolution texture for some specific elements? Like this door with is very splotchy.",
+    "camera": {
+      "position": [
+        -12.478,
+        -1,
+        3.243
+      ],
+      "fov": 38.37,
+      "aspect": 1.7962,
+      "target": [
+        -7.044,
+        -1.03,
+        1.071
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-12.478%2C-1%2C3.243&tgt=-7.044%2C-1.03%2C1.071&sel=Cube001&review=1",
+    "shot": "shots/n004.jpg",
+    "resolution": "Won't do for now — a request to bake a higher-resolution texture for the door, not a defect. Closed by decision, not by a change. The door shares a 4096 atlas with the rest of the facade, so raising it means giving this object its own texture rather than turning a dial.",
+    "updated": "2026-08-17T04:27:45.241Z"
+  },
+  {
+    "id": "n005",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T15:25:37.569Z",
+    "object": "Rack_1001",
+    "objects": [
+      "Rack_1001"
+    ],
+    "material": "PBS_rack_1_mat",
+    "point_blender": [
+      -5.792,
+      -6.242,
+      -1.922
+    ],
+    "edits": [],
+    "comment": "we can lose the heavy ping and bake the shelves way down.",
+    "camera": {
+      "position": [
+        -11.641,
+        0.353,
+        -2.648
+      ],
+      "fov": 38.37,
+      "aspect": 1.7962,
+      "target": [
+        -7.139,
+        -1.011,
+        0.833
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-11.641%2C0.353%2C-2.648&tgt=-7.139%2C-1.011%2C0.833&sel=Rack_1001&review=1",
+    "shot": "shots/n005.jpg",
+    "resolution": "Won't do for now — a request to cut the rack's geometry and texture budget, not a defect. Closed by decision, not by a change. Nothing has been optimised; the rack still ships as exported.",
+    "updated": "2026-08-17T04:27:45.318Z"
+  },
+  {
+    "id": "n006",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T15:32:50.925Z",
+    "object": "Raidiator_01",
+    "objects": [
+      "Raidiator_01"
+    ],
+    "material": "Rust metal",
+    "point_blender": [
+      -12.985,
+      -8.042,
+      -1.719
+    ],
+    "edits": [],
+    "comment": "textures are not rendering properly across the radiator pieces.",
+    "camera": {
+      "position": [
+        -2.767,
+        0.334,
+        0.937
+      ],
+      "fov": 40.7,
+      "aspect": 1.685,
+      "target": [
+        -10.022,
+        -2.261,
+        10.137
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-2.767%2C0.334%2C0.937&tgt=-10.022%2C-2.261%2C10.137&sel=Raidiator_01&review=1",
+    "shot": "shots/n006.jpg",
+    "resolution": "Fixed: same cause as n014 — shadow acne under PCSS, which shows as rainbow banding on fine geometry rather than stripes. Cleared by the shadow bias work (2mm depth bias, 6mm normalBias).",
+    "updated": "2026-08-17T04:26:10.945Z"
+  },
+  {
+    "id": "n007",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T15:33:26.821Z",
+    "object": "Cube169_1",
+    "objects": [
+      "Cube169_1"
+    ],
+    "material": "modular_factory_facade_windows_glass",
+    "point_blender": [
+      -9.369,
+      -13.826,
+      -0.609
+    ],
+    "edits": [],
+    "comment": "Widow trim color (green) not displaying",
+    "camera": {
+      "position": [
+        -7.683,
+        0.746,
+        -2.226
+      ],
+      "fov": 40.7,
+      "aspect": 1.685,
+      "target": [
+        -11.861,
+        -2.022,
+        8.677
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-7.683%2C0.746%2C-2.226&tgt=-11.861%2C-2.022%2C8.677&sel=Cube169_1&review=1",
+    "shot": "shots/n007.jpg",
+    "resolution": "Fixed: same as n016 — the green baseColorFactor (0.0575, 0.0857, 0.045) IS present in the current .glb, so the post-export patch was re-run. Verified by reading the material, not by eye.",
+    "updated": "2026-08-17T04:26:11.023Z"
+  },
+  {
+    "id": "n008",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-16T16:04:00.067Z",
+    "object": "Column005",
+    "objects": [
+      "Column005"
+    ],
+    "material": "modular_factory_facade_trim_01",
+    "point_blender": [
+      -2.287,
+      -4.607,
+      0.558
+    ],
+    "edits": [],
+    "comment": "The concrete columns are black now. Just a heads up.",
+    "camera": {
+      "position": [
+        -12.387,
+        -0.506,
+        1.392
+      ],
+      "fov": 40.7,
+      "aspect": 1.685,
+      "target": [
+        3.927,
+        -1.076,
+        1.429
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory/index.html?dev=1&cam=-12.387%2C-0.506%2C1.392&tgt=3.927%2C-1.076%2C1.429&sel=Column005&review=1",
+    "shot": "shots/n008.jpg",
+    "resolution": "Not a bug — measured. modular_factory_facade_trim_01 sampled at this object's own UVs reads 37,33,29 against a brick control of 132,97,76, so it is ~3.5x darker and displaying correctly. If these should read as concrete it is a material assignment in Blender; M_DPW_Concrete and 'Concrete used' both already exist in the file. Same finding as n009, which is still open.",
+    "updated": "2026-08-17T04:26:21.565Z"
+  },
+  {
+    "id": "n009",
+    "status": "open",
+    "loop": "factory",
+    "at": "2026-08-17T03:06:15.469Z",
+    "object": "Column006",
+    "objects": [
+      "Column006"
+    ],
+    "material": "modular_factory_facade_trim_01",
+    "point_blender": [
+      -1.991,
+      3.685,
+      0.148
+    ],
+    "edits": [],
+    "comment": "Black column should be concrete so our texture is not displaying correctly.",
+    "camera": {
+      "position": [
+        -12.034,
+        0.458,
+        4.574
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.938,
+        -0.905,
+        -3.748
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.034%2C0.458%2C4.574&tgt=2.938%2C-0.905%2C-3.748&sel=Column006&review=1",
+    "shot": "shots/n009.jpg"
+  },
+  {
+    "id": "n010",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-17T03:12:06.416Z",
+    "object": "SM_DPW_Ground_001",
+    "objects": [
+      "SM_DPW_Ground_001"
+    ],
+    "material": "Old wooden floor",
+    "point_blender": [
+      -0.07,
+      1.363,
+      -2.284
+    ],
+    "edits": [],
+    "comment": "The Sun is shining through the edges of the walls where they meet other objects.",
+    "camera": {
+      "position": [
+        -12.488,
+        -0.888,
+        2.359
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.72,
+        -2.184,
+        -3.432
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.488%2C-0.888%2C2.359&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
+    "shot": "shots/n010.jpg",
+    "resolution": "Fixed: shadow.bias was in normalised depth, so the 50m shadow box turned -0.0006 into 3cm of offset. Stored in metres now; normalBias 0.06 -> 0.006.",
+    "updated": "2026-08-17T04:24:08.658Z"
+  },
+  {
+    "id": "n011",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-17T03:13:21.401Z",
+    "object": "SM_DPW_Ground_001",
+    "objects": [
+      "SM_DPW_Ground_001"
+    ],
+    "material": "Old wooden floor",
+    "point_blender": [
+      -5.494,
+      0.654,
+      -2.284
+    ],
+    "edits": [],
+    "comment": "light shafts appear to be casting their shadow on the adjacent shaft",
+    "camera": {
+      "position": [
+        -12.258,
+        0.395,
+        2.527
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.72,
+        -2.184,
+        -3.432
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.258%2C0.395%2C2.527&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
+    "shot": "shots/n011.jpg",
+    "resolution": "Fixed with soft particles. The 'shadow' was the silhouette of the flat quad each beam is painted on — sliced along a straight line wherever it passed through the floor. The opaque scene now renders into a depth texture first and each beam fades as it approaches whatever is behind it, so it behaves like a volume instead of a sheet. Plus a near-fade for walking into a beam, and a wider facing fade for beams slicing open air.",
+    "updated": "2026-08-17T04:47:39.059Z"
+  },
+  {
+    "id": "n012",
+    "status": "open",
+    "loop": "factory",
+    "at": "2026-08-17T03:14:51.565Z",
+    "object": "SM_DPW_Ground_001",
+    "objects": [
+      "SM_DPW_Ground_001"
+    ],
+    "material": "Old wooden floor",
+    "point_blender": [
+      -5.494,
+      0.654,
+      -2.284
+    ],
+    "edits": [],
+    "comment": "Floor texture is very soft. This cause an issue when it's close to the brick wall which is much crisper and detailed.",
+    "camera": {
+      "position": [
+        -11.536,
+        -0.005,
+        4.217
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.72,
+        -2.184,
+        -3.432
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-11.536%2C-0.005%2C4.217&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
+    "shot": "shots/n012.jpg"
+  },
+  {
+    "id": "n013",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-17T03:18:48.320Z",
+    "object": "SM_DPW_WindowPanel_002002",
+    "objects": [
+      "SM_DPW_WindowPanel_002002"
+    ],
+    "material": "M_DPW_DirtDecal",
+    "point_blender": [
+      -5.925,
+      -5.526,
+      4.868
+    ],
+    "edits": [],
+    "comment": "dirt / window texture is completely opaque.",
+    "camera": {
+      "position": [
+        -12.186,
+        1.939,
+        12.157
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        -7.457,
+        3.584,
+        5.438
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.186%2C1.939%2C12.157&tgt=-7.457%2C3.584%2C5.438&sel=SM_DPW_WindowPanel_002002&review=1",
+    "shot": "shots/n013.jpg",
+    "resolution": "Fixed: M_DPW_DirtDecal's alpha channel was being discarded (glTF alphaMode OPAQUE), so it rendered as a solid sheet. It is not a small decal — it is the roof glazing over the whole far bay, so that bay was unlit. Decals now blend; aperture detection matches WindowPanel by name, taking the scene from 2 roof openings to 4.",
+    "updated": "2026-08-17T04:26:10.869Z"
+  },
+  {
+    "id": "n014",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-17T03:19:45.140Z",
+    "object": "Raidiator_02",
+    "objects": [
+      "Raidiator_02"
+    ],
+    "material": "Rust metal",
+    "point_blender": [
+      -12.976,
+      -1.248,
+      -1.745
+    ],
+    "edits": [],
+    "comment": "Radiators are fixed. Close it out!",
+    "camera": {
+      "position": [
+        -5.743,
+        -0.821,
+        1.005
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        -14,
+        -2.185,
+        0.577
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-5.743%2C-0.821%2C1.005&tgt=-14%2C-2.185%2C0.577&sel=Raidiator_02&review=1",
+    "shot": "shots/n014.jpg",
+    "resolution": "Confirmed fixed — was shadow acne under PCSS; normalBias 0.02 -> 0.06.",
+    "updated": "2026-08-17T04:07:55.440Z"
+  },
+  {
+    "id": "n015",
+    "status": "open",
+    "loop": "factory",
+    "at": "2026-08-17T03:20:35.996Z",
+    "object": "Cube001_1",
+    "objects": [
+      "Cube001_1"
+    ],
+    "material": "modular_factory_facade_doors",
+    "point_blender": [
+      -6.112,
+      3.922,
+      -0.042
+    ],
+    "edits": [],
+    "comment": "Door beam also rendering very dark",
+    "camera": {
+      "position": [
+        -9.981,
+        0.232,
+        1.856
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        -4.957,
+        -1.418,
+        -4.645
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-9.981%2C0.232%2C1.856&tgt=-4.957%2C-1.418%2C-4.645&sel=Cube001_1&review=1",
+    "shot": "shots/n015.jpg"
+  },
+  {
+    "id": "n016",
+    "status": "closed",
+    "loop": "factory",
+    "at": "2026-08-17T03:28:14.396Z",
+    "object": "cornice03_standard_standard_01003",
+    "objects": [
+      "cornice03_standard_standard_01003"
+    ],
+    "material": "modular_factory_facade_brick",
+    "point_blender": [
+      -13.387,
+      -12.205,
+      2.198
+    ],
+    "edits": [],
+    "comment": "green window texture is fixed and can be closed.",
+    "camera": {
+      "position": [
+        -7.322,
+        0.189,
+        3.524
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        -23.341,
+        -1.157,
+        11.815
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-7.322%2C0.189%2C3.524&tgt=-23.341%2C-1.157%2C11.815&sel=cornice03_standard_standard_01003&review=1",
+    "shot": "shots/n016.jpg",
+    "resolution": "Confirmed fixed — baseColorFactor (0.0575, 0.0857, 0.045) is present in the current .glb."
+  }
+]

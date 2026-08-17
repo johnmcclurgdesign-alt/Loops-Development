@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feedback — Loops</title>
+  <style>
+    /* Same palette as the gallery, so the two read as one tool. */
+    :root {
+      --bg: #0b0e14; --panel: #12161f; --line: #1f2532; --line2: #2a3040;
+      --ink: #e8eaf0; --soft: #8b93a7; --accent: #c9a227;
+      --open: #6ea8fe; --done: #4ec48a; --warn: #e0a15a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+      font: 15px/1.6 -apple-system, "Segoe UI", sans-serif; padding: 5vh 4vw 12vh;
+    }
+    h1 { font-size: 13px; letter-spacing: .22em; text-transform: uppercase;
+         color: var(--soft); font-weight: 500; margin: 0 0 4px; }
+    .lede { color: var(--soft); max-width: 62ch; margin: 0 0 22px; }
+    a { color: var(--open); }
+
+    /* A note is one line of prose next to one thumbnail, so the useful width is set by
+       reading, not by the window. Past ~1000px the comment stretches into a single long
+       line and the eye has to travel the whole monitor to get from the object name to the
+       button that closes it. */
+    .bar, .grid { max-width: 1000px; }
+    .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+           margin: 0 0 22px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .count { font: 12px/1 ui-monospace, Consolas, monospace; color: var(--soft);
+             padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+    .count b { color: var(--ink); font-weight: 600; }
+    button {
+      font: inherit; font-size: 13px; color: var(--ink); background: var(--panel);
+      border: 1px solid var(--line2); border-radius: 6px; padding: 7px 13px; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent); }
+    button[aria-pressed="true"] { background: #1b2231; border-color: var(--open); color: #fff; }
+    button.done { border-color: #2f6b4f; }
+    button.done:hover { border-color: var(--done); }
+
+    .grid { display: grid; gap: 14px; }
+    .note {
+      display: grid; grid-template-columns: 190px 1fr; gap: 18px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
+    }
+    .note[data-status="closed"] { opacity: .55; }
+    .note[data-status="closed"]:hover { opacity: 1; }
+    .shot { width: 100%; border-radius: 6px; border: 1px solid var(--line2); display: block;
+            aspect-ratio: 16/10; object-fit: cover; background: #0c0f16; }
+    .noshot { display: grid; place-items: center; color: var(--soft); font-size: 12px; }
+
+    .head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+    .id { font: 12px/1 ui-monospace, Consolas, monospace; color: var(--soft); }
+    .pill { font: 11px/1 ui-monospace, Consolas, monospace; text-transform: uppercase;
+            letter-spacing: .1em; padding: 4px 8px; border-radius: 100px; border: 1px solid; }
+    .pill.open { color: var(--open); border-color: #2a4570; }
+    .pill.closed { color: var(--done); border-color: #2f6b4f; }
+    .obj { font-size: 15px; }
+    .meta { font: 11px/1.5 ui-monospace, Consolas, monospace; color: var(--soft); margin-bottom: 8px; }
+    .comment { margin: 0 0 12px; }
+    .res { color: var(--done); font-size: 13px; margin: 0 0 12px; }
+    .res:empty { display: none; }
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    input[type=text] {
+      flex: 1 1 260px; min-width: 200px; font: inherit; font-size: 13px;
+      color: var(--ink); background: #0d1119; border: 1px solid var(--line2);
+      border-radius: 6px; padding: 7px 10px;
+    }
+    input[type=text]:focus { outline: none; border-color: var(--open); }
+
+    #msg { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 4vw;
+           background: #171c27; border-top: 1px solid var(--line2);
+           font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--soft); }
+    #msg.warn { color: var(--warn); }
+    @media (max-width: 720px) { .note { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <h1>Feedback</h1>
+  <p class="lede">Every note left on a loop, and whether it has been dealt with. Click a
+  thumbnail to open the scene at the exact camera the note was written from, with the object
+  already selected.</p>
+
+  <div class="bar">
+    <span class="count" id="counts">loading…</span>
+    <button id="f-open"   aria-pressed="true">Open</button>
+    <button id="f-closed" aria-pressed="false">Done</button>
+    <button id="f-all"    aria-pressed="false">All</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div id="msg"></div>
+
+<script type="module">
+  // Two ways in, exactly like the feedback panel itself: served by tools/dev-server.mjs the
+  // notes are live and writable; opened any other way (GitHub Pages, file://) it falls back
+  // to the committed notes.json and goes read-only rather than pretending a save worked.
+  const msg = document.getElementById('msg');
+  const grid = document.getElementById('grid');
+  const counts = document.getElementById('counts');
+
+  let notes = [];
+  let writable = false;
+  let filter = 'open';
+  let source = null;          // whichever URL actually answered, so polling reuses it
+  let lastSeen = '';          // serialised notes, to skip re-rendering when nothing moved
+
+  function say(text, warn = false) {
+    msg.textContent = text;
+    msg.classList.toggle('warn', warn);
+  }
+
+  async function fetchNotes() {
+    if (source) {
+      const r = await fetch(source, { cache: 'no-store' });
+      return r.ok ? await r.json() : null;
+    }
+    // Try the API first — its presence is what tells us we can write back.
+    try {
+      const r = await fetch('/api/feedback', { cache: 'no-store' });
+      if (r.ok) { source = '/api/feedback'; writable = true; return await r.json(); }
+    } catch { /* not on the dev server */ }
+    try {
+      const r = await fetch('notes.json', { cache: 'no-store' });
+      if (r.ok) { source = 'notes.json'; writable = false; return await r.json(); }
+    } catch { /* nothing to read */ }
+    return null;
+  }
+
+  async function load() {
+    const fresh = await fetchNotes();
+    if (!fresh) { notes = []; say('could not load notes', true); return; }
+    notes = fresh;
+    lastSeen = JSON.stringify(fresh);
+    say(writable
+      ? `${notes.length} notes · live from the dev server · changes are written to feedback/notes.json`
+      : 'read-only — no dev server. Run  node tools/dev-server.mjs 5173  to tick notes off.', !writable);
+  }
+
+  // notes.json is written by three things — this page, the feedback panel in a loop, and
+  // tools/note.mjs from the command line. A page that read once at load would sit there
+  // showing a note as open long after it was closed somewhere else, which is exactly the
+  // kind of quiet drift a tracker exists to prevent. So poll, and only re-render when the
+  // file has actually changed.
+  async function poll() {
+    if (document.hidden) return;
+    try {
+      const fresh = await fetchNotes();
+      if (!fresh) return;
+      const s = JSON.stringify(fresh);
+      if (s === lastSeen) return;
+      lastSeen = s;
+      notes = fresh;
+      render();
+      say(`updated · ${notes.filter((n) => n.status !== 'closed').length} open · changed elsewhere just now`);
+    } catch { /* transient — the next tick will catch up */ }
+  }
+  setInterval(poll, 3000);
+  // Coming back to the tab should feel instant rather than waiting out the interval.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
+
+  // The note stores an absolute view URL against whatever host it was written on, which is
+  // wrong the moment you open this from anywhere else. Rebuild it against the current
+  // origin, keeping the query — that is the part that carries the camera.
+  function viewHref(n) {
+    if (!n.view) return null;
+    try {
+      const u = new URL(n.view, location.href);
+      return u.pathname + u.search;
+    } catch { return n.view; }
+  }
+
+  function card(n) {
+    const el = document.createElement('div');
+    el.className = 'note';
+    el.dataset.id = n.id;
+    el.dataset.status = n.status === 'closed' ? 'closed' : 'open';
+
+    const href = viewHref(n);
+    const shot = n.shot
+      ? `<img class="shot" src="${n.shot}" alt="" loading="lazy">`
+      : `<div class="shot noshot">no screenshot</div>`;
+    const thumb = href ? `<a href="${href}" title="Open the scene at this camera">${shot}</a>` : shot;
+
+    const when = n.at ? new Date(n.at).toLocaleString() : '';
+    const edits = (n.edits && n.edits.length) ? ` · ${n.edits.length} moved` : '';
+
+    el.innerHTML = `
+      <div>${thumb}</div>
+      <div>
+        <div class="head">
+          <span class="id">${n.id}</span>
+          <span class="pill ${el.dataset.status}">${el.dataset.status}</span>
+          <span class="obj">${n.object ?? '(no object)'}</span>
+        </div>
+        <div class="meta">${[n.material, when + edits].filter(Boolean).join('  ·  ')}</div>
+        <p class="comment">${(n.comment ?? '').replace(/</g, '&lt;')}</p>
+        <p class="res">${n.resolution ? '✓ ' + n.resolution.replace(/</g, '&lt;') : ''}</p>
+        <div class="actions"></div>
+      </div>`;
+
+    const actions = el.querySelector('.actions');
+    if (href) {
+      const open = document.createElement('button');
+      open.textContent = 'Open view';
+      open.onclick = () => location.assign(href);
+      actions.appendChild(open);
+    }
+
+    if (n.status === 'closed') {
+      const re = document.createElement('button');
+      re.textContent = 'Reopen';
+      re.onclick = () => update(n, { status: 'open' });
+      actions.appendChild(re);
+    } else {
+      const why = document.createElement('input');
+      why.type = 'text';
+      why.placeholder = 'what fixed it (optional)';
+      why.value = n.resolution ?? '';
+      const done = document.createElement('button');
+      done.className = 'done';
+      done.textContent = 'Mark done';
+      done.onclick = () => update(n, { status: 'closed', resolution: why.value.trim() });
+      why.onkeydown = (e) => { if (e.key === 'Enter') done.click(); };
+      actions.append(why, done);
+    }
+    return el;
+  }
+
+  async function update(n, patch) {
+    if (!writable) {
+      // No server to write to. Hand over something pasteable rather than silently failing,
+      // the same bargain ?review=1 makes on Pages.
+      const line = `${n.id} → ${patch.status}${patch.resolution ? ' — ' + patch.resolution : ''}`;
+      try { await navigator.clipboard.writeText(line); say('read-only — copied to clipboard: ' + line, true); }
+      catch { say('read-only — ' + line, true); }
+      return;
+    }
+    try {
+      const r = await fetch('/api/feedback/update', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: n.id, ...patch }),
+      });
+      const out = await r.json();
+      if (!out.ok) throw new Error(out.error || 'update failed');
+      Object.assign(n, out.note);
+      render();
+      say(`${n.id} → ${n.status}  ·  saved to feedback/notes.json`);
+    } catch (e) {
+      say('save failed: ' + e.message, true);
+    }
+  }
+
+  function render() {
+    // A poll can land while someone is halfway through typing a reason. Rebuilding the DOM
+    // would throw that away along with the caret, which would read as the page fighting
+    // you. Carry every in-progress value across the rebuild, and put the caret back.
+    const typed = new Map();
+    for (const el of grid.querySelectorAll('.note')) {
+      const input = el.querySelector('input[type=text]');
+      if (input && input.value) typed.set(el.dataset.id, input.value);
+    }
+    const focused = document.activeElement;
+    const focusedId = focused?.tagName === 'INPUT'
+      ? focused.closest('.note')?.dataset.id : null;
+    const caret = focusedId ? [focused.selectionStart, focused.selectionEnd] : null;
+
+    const open = notes.filter((n) => n.status !== 'closed').length;
+    const closed = notes.length - open;
+    counts.innerHTML = `<b>${open}</b> open · <b>${closed}</b> done · ${notes.length} total`;
+
+    const shown = notes.filter((n) =>
+      filter === 'all' ? true : filter === 'open' ? n.status !== 'closed' : n.status === 'closed');
+
+    grid.replaceChildren(...(shown.length
+      ? shown.map(card)
+      : [Object.assign(document.createElement('p'), {
+          className: 'lede', textContent: 'Nothing here. Try another filter.' })]));
+
+    for (const [id, value] of typed) {
+      const input = grid.querySelector(`.note[data-id="${id}"] input[type=text]`);
+      if (input && !input.value) input.value = value;
+    }
+    if (focusedId) {
+      const input = grid.querySelector(`.note[data-id="${focusedId}"] input[type=text]`);
+      if (input) { input.focus(); try { input.setSelectionRange(...caret); } catch {} }
+    }
+  }
+
+  for (const [id, val] of [['f-open', 'open'], ['f-closed', 'closed'], ['f-all', 'all']]) {
+    document.getElementById(id).onclick = () => {
+      filter = val;
+      for (const b of ['f-open', 'f-closed', 'f-all']) {
+        document.getElementById(b).setAttribute('aria-pressed', String(b === id));
+      }
+      render();
+    };
+  }
+
+  await load();
+  render();
+</script>
+</body>
+</html>

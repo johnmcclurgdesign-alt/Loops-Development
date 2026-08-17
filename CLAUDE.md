@@ -52,6 +52,149 @@ Export **glTF 2.0 (`.glb`)** — mesh, materials, textures, animations in one fi
 - Keep `.glb` under ~10 MB per loop. Use Draco or Meshopt compression above that.
 - Real-time shadow casters cost the most. Flag which objects genuinely need to cast.
 
+## Unreal → web (the cat)
+
+The cat comes from Unreal, not Blender — `/Game/Cat_Simple/` in `Loops_PickleFactory`, the $30
+Fab "Cats – Simple" pack. UE 5.8 ships a glTF exporter, so there is no Blender round-trip:
+`unreal.GLTFSkeletalMeshExporter` for the mesh, `unreal.GLTFAnimSequenceExporter` per clip,
+driven by `unreal.AssetExportTask`.
+
+- **Exporting a SkeletalMesh does NOT include its animations, even with
+  `export_animation_sequences=True`.** The probe export reported success and contained
+  `animations 0`. Every clip must be its own export, and each one needs
+  `export_preview_mesh=False` or it ships another copy of the 5.8 MB cat.
+  Result: `cat.glb` + one small `anim_<name>.glb` per clip (~70–330 KB each), loaded in
+  parallel and fed to a single `AnimationMixer`.
+- **`export_uniform_scale` defaults to 0.01, which is already correct** (Unreal centimetres →
+  glTF metres). Leave it. The check that it worked is the model's bounding box: the cat reads
+  0.14 × 0.45 × 0.78 m, and a wrong scale reads ~45 or ~0.005.
+- **Bone names survive the trip identically**, so a clip exported from one asset binds to a
+  mesh exported from another — 51/51 joints matched here with zero mismatches. Verify it before
+  building anything on top: a name mismatch fails silently as a cat that simply never moves.
+- **Take the `_IP` (in-place) clips, never `_RM`.** Root motion makes the clip travel, and the
+  steering system is already moving the body — you get double speed, which reads as the feet
+  being wrong rather than the obvious "there are two movement systems".
+- **No turn clips.** A fixed-length turn animation fights continuous steering; that pairing is
+  what produced the Unreal cat's wall-walking. The body rotates under the walk cycle instead.
+- Skinned meshes need `frustumCulled = false` — the bounds are computed from the bind pose and
+  do not follow the bones, so the cat vanishes at certain camera angles.
+- `Box3.setFromObject` on a skinned mesh also reports the BIND pose. To measure the animated
+  pose, walk the bones' world positions instead.
+- The textures are the whole file, not the geometry: base colour 1.8 MB, normal 2.4 MB, ORM
+  1.1 MB out of 5.8 MB. Strip with `tools/glb-strip.mjs` (below); the cat ships without ORM.
+- **★ UNREAL PACKS OCCLUSION/ROUGHNESS/METALLIC INTO ONE IMAGE AND WIRES IT TO TWO SLOTS** —
+  both `metallicRoughnessTexture` and `occlusionTexture` point at `T_Cat_Metallic_Linear`. Drop
+  one slot and the image survives on the other, the file comes back the **same size**, and it
+  reads as the tool being broken. `--drop metallicRoughness,occlusion` is what actually removes
+  it (5.79 → 4.66 MB). Losing it costs a little roughness variation and AO along with the
+  metal; if the fur ever looks plasticky, that is the thing to put back.
+- **Removing a glTF image is not a delete.** Accessors and images index a shared `bufferViews`
+  list, so dropping one shifts every index after it. `tools/glb-strip.mjs` rebuilds the BIN
+  chunk from only the referenced views and remaps everything, rather than orphaning the bytes.
+  It must be re-run after **every** re-export.
+- **Dropping `metallicRoughnessTexture` without setting `metallicFactor = 0` makes it worse.**
+  glTF defaults that factor to 1.0, so removing the texture renders the cat as chrome.
+- **21 clips cost 4.0 MB — animation is not free.** Long idles are the expensive ones (7.5 s =
+  412 KB). The full set is 9.9 MB against a ~10 MB budget; the next lever is the 2.4 MB normal
+  map, which is real quality on a dynamically lit character, so weigh it rather than reflexively
+  cutting.
+- **There are SIX coats, not twelve.** The pack ships `T_Cat_BaseColor_1..6` at 2048 and
+  `T_Cat_BaseColor_M_1..6` at **512** — the same six coats at a lower resolution, not six more.
+  Mean colours match pairwise (c5 `140,106,77` vs m5 `140,104,77`) and downscaling ours to 512
+  gives 34–39 dB PSNR against theirs. The `_M_` set is not shipped.
+- **Fur is loaded as external JPEGs, and stripped from the .glb** (`--drop baseColor`) so there
+  is one source of truth and the export does not pin the default. 6 × 1024 JPEG = 1.2 MB, which
+  is *less than the single base colour the .glb used to carry*. An externally loaded base colour
+  needs **`flipY = false`** (glTF UVs are top-left origin; `GLTFLoader` sets this for embedded
+  textures, a separately loaded one does not get it and the fur comes out mirrored) and
+  **`colorSpace = SRGBColorSpace`** (linear renders pale and washed out). Verify by loading a
+  glb that still has the texture embedded and comparing what `GLTFLoader` set — do not eyeball it.
+  Also `map.dispose()` before reassigning, or every swap leaks a texture.
+- **UE's glTF exporter downsizes textures on the way out.** The source is 2048 but the image
+  embedded in the .glb decodes to **1024**, so matching 1024 externally costs no quality at all.
+  Read the decoded `image.width`, not the source asset's resolution.
+- **Check a rest chain has a way OUT.** The first export shipped `Lie_belly_start/loop/sleep` and
+  no `Lie_belly_end`, so he could lie down and fall asleep but never stand up. The pack names
+  `_start` / `_loop_N` / `_end` consistently — take the whole chain or the state machine dead-ends.
+
+## Steering the cat — Yuka
+
+`loops/cat-test/` drives him with [Yuka](https://github.com/Mugen87/yuka) 0.7.8 off jsDelivr,
+straight into the importmap — MIT, zero dependencies, no build step. Yuka decides **where he
+goes**; the `AnimationMixer` decides **how his legs move**. The only thing crossing between them
+is travel speed → clip playback rate.
+
+**★ A CAT CHANGES DIRECTION, NOT PACE — and you have to impose that.** It does not rotate on the
+spot; it keeps walking and arcs round until it is facing the new way. Steering gives you a force
+vector, and part of that vector points *along* the velocity, so it brakes as well as turns. When
+the leash fired, speed fell 0.45 → 0.07 m/s and the heading at the bottom of that is noise, so he
+stopped and spun: **367 pivot frames in five minutes**. The fix is to use steering for its
+DIRECTION only — hold a `travelDir` across frames, move it toward what steering asked for by at
+most `maxTurnRate * dt`, and rebuild the velocity at a constant speed. The path radius is then
+`speed / turnRate` by construction. Measured after: 0 pivot frames, tightest arc 0.55 m against
+0.55 configured, peak turn 46.9°/s against a 46.9 cap, slip (facing vs moving) 0.0°.
+
+**Set an arc RADIUS in metres, never a force or a turn speed.** Everything derives from it:
+`maxForce = v²/r`, `maxTurnRate = v/r`. Setting force directly is how you get a pivot — `maxForce`
+of 4 at 0.45 m/s is a 5 cm turning circle.
+
+**★ `steering.add()` ORDER IS PRIORITY. It is not a weighted average.** Yuka walks the behaviours
+in the order they were added and gives each whatever force budget remains under `maxForce`, so the
+first one can consume the lot. With wander added before the leash, the leash was starved no matter
+what weight it carried — he reached 20.7 m from a 5 m circle and spent 46% of five minutes past
+10 m. Add the constraint FIRST and leave it inert (weight 0) where it should not apply.
+
+**Weights multiply raw forces, and those raw forces are nowhere near the same size.**
+`WanderBehavior`'s is roughly its `distance` (5), `SeekBehavior`'s about `2 × maxSpeed` (0.9). A
+seek weight of 10 still loses to a wander weight of 1. Compare forces, never weights.
+
+**A circular leash is always SOFT.** He cannot turn tighter than the arc radius, so he must
+overshoot, and the moment he crosses back inside the leash releases. A 5 m leash measured an 8.7 m
+roam; raising the gain 0.8 → 4 moved the maximum only 9.4 → 8.7 m, because the turn rate binds,
+not the pull. Size the circle for where you want him, not where you want the fence.
+
+**`WanderBehavior` picks its target on a SPHERE**, so it will steer a ground animal up into the
+air. Pin `position.y` and `velocity.y` every frame.
+
+**`setRenderComponent` needs `object.matrixAutoUpdate = false`.** Left on, three recomposes
+`.matrix` from position/quaternion every frame and silently discards everything Yuka wrote — the
+cat animates perfectly on the spot and never moves an inch.
+
+**Start the vehicle with a non-zero velocity.** From a dead stop there is no heading to face, so
+the body snaps to whatever steering picks first: measured 522°/s over the opening frames against a
+47°/s cap, then clean forever after.
+
+**★ LOW `jitter` DOES NOT READ AS CALM — it reads as driving in circles.** Yuka's wander target
+random-walks around a small sphere, and the *sign* of the steer only flips when that target crosses
+the centre line. At jitter 2 the crossing takes most of a minute, so he holds one turn direction
+and loops: measured over five minutes, the worst single sweep was **597°** — a circle and a half —
+with a median sweep of 117°. At jitter 9 that is 232° worst / 7° median, and turns come out even
+(48 left, 41 right). Default is 9.
+
+**Do not widen `radius`/`distance` to get a livelier walk — it makes the circling worse.** That
+ratio sets the maximum steer angle (`atan(1/5)` = 11° here); opening it parks the steer target
+further off-centre so it takes *longer* to cross back. Worst sweep went 232° at radius 1 → 699° at
+radius 2 → 784° at radius 3. Restlessness is the jitter's job. Leave radius 1 / distance 5.
+
+**Wander's force magnitude is CONSTANT** (`≈ sqrt(distance² + radius²)`, ~5) — only its direction
+varies, and it is always far above `maxForce`, so it is always truncated. Do not expect a
+"gentle" wander by tuning its magnitude; there isn't one to tune.
+
+**The arc dial needs a `curve`, because turn rate is `speed / radius` — a reciprocal.** On a linear
+0.2–2.5 slider the 0.55 default sat at **15%** of travel and the top two thirds all looked
+identical. `curve: 2.2` (the same value the shafts dial in `looks.js` uses, for the same reason)
+puts it at 43% and gives 0.2–0.7 — where the character of the turn actually changes — about half
+the travel. Reuse the `looks.js` dial contract rather than inventing a second scheme: input runs
+0..1, `value = min + (max-min) * t^curve`.
+
+**Foot skate is one number.** Clip rate = travel speed / the speed the clip was authored for
+(`stride`). Tune it against the one-metre grid until a paw stays planted on a line as it passes —
+there is no way to eyeball this without the grid.
+
+**Whatever moves him has to write BOTH transforms.** With wander on Yuka owns `model.matrix`; with
+it off three does. A recentre (or any teleport) that writes only one of them looks fine until the
+mode is toggled, at which point he snaps back to where he was.
+
 ## What carries the look
 
 In this order — atmosphere first, geometry last:
@@ -133,6 +276,130 @@ lightmapped object single-user first.
 **A blocking bake outlasts the MCP timeout.** `bpy.ops.object.bake` freezes Blender's main
 thread. Set everything up from Python, then have the user press the Bake button — they get
 a progress bar and a cancel, and the connection survives.
+
+**★ THE BAKE MARGIN MUST BE LESS THAN HALF THE PACK GAP.** This is the white-outline bug, and it is
+pure arithmetic. `render.bake.margin` floods each island's colour *outward* by that many pixels; if
+two islands are closer than twice the margin, their floods meet and each paints into the other.
+Shipped 2026-08-16 with **gap 8 px / margin 16 px** — every island overran. Measured on the atlas:
+the ring 0–4 px outside a wall's island was 87% lit at **2.6× the wall's own brightness**, rising to
+7.2× by 24 px. Correct pairing here: **gap 8 px, margin 3 px** (2 px dead zone).
+**Raising the gap is NOT the fix — 16 px is unaffordable at this island count.** `pack_islands`
+applies `margin_method='FRACTION'` per island, and with thousands of islands the margin cost exceeds
+the unit square: the pack silently collapses to a total UV area of ~5e-11 spilling past 1.6.
+
+**A collapsed pack reports success — always verify before baking.** Assert `total UV area > 0.2`
+(healthy is ~0.31–0.37) **and** that the extent sits inside 0–1. Three separate attempts here
+returned "done" while producing a dead atlas.
+
+**Scale island clusters about the UV ORIGIN, never their own centre.** Centring pushes UVs negative,
+and `pack_islands(udim_source='CLOSEST_UDIM')` sends a negative island to a *neighbouring UDIM tile*
+rather than into 0–1 — which is one of the collapses above. smart_project output is always ≥ 0, so
+origin scaling stays safe.
+
+**Normalise island scale by WORLD area.** `average_islands_scale` measures local space (trap 2 above).
+Compute world area per object and scale each object's UVs to a constant UV-area-per-m². A per-object
+bbox clamp is a blunt instrument — the global pack nests **individual islands**, so an object's
+overall bbox is irrelevant to packing, and clamping on it starves those objects (56 objects here ran
+at 10 texels/m against a 61 median). Fixing that properly needs island-level splitting of long
+slivers, not a parameter tweak.
+
+**★ THE BAKE TARGET MUST BE ACTIVE *AND* SELECTED, in EVERY material.** Cycles skips any material
+where the image node is active but not selected — and clicking in the Shader Editor does exactly
+that (it deselects nodes while leaving `nodes.active` set). One material in 30 was in that state and
+**151 of 251 objects baked nothing**; the bake still "completed". Before every bake assert, for each
+material, `bt.select and nt.nodes.active.name == 'BAKE_TARGET'`, and also sweep every object's
+material slots for empty slots or materials with no target node.
+
+**Reading the bake's report log.** `bpy.ops.ui.reports_to_textblock()` does not exist in 5.2. Instead
+temporarily switch an area to `INFO`, then under `bpy.context.temp_override(...)` run
+`bpy.ops.info.select_all(action='SELECT')` + `bpy.ops.info.report_copy()` and read
+`window_manager.clipboard`. The message to grep for is
+*"No active and selected image texture node found in material"*. Note the log is capped, so absence
+of an old entry is not proof it never happened — corroborate with the atlas itself.
+
+**Verify bake completeness, not just that it ran.** Compare the atlas's lit fraction against its
+triangle coverage (a complete bake here reads ~64% lit / max luma ~192; the failed one read 23.4% /
+max 30), then sample each object's face centroids against the lit mask to get a per-object
+percentage — that names exactly which objects were skipped.
+
+**Read that per-object percentage with the room in mind — most low numbers are not failures.**
+Measured 2026-08-16 on a healthy 63.97% bake: 4 objects read <5% and 80 read 5–50%, and almost all
+were correct. A 6-face box at 33.3% is two faces catching light in a dim interior, which is the
+right answer; objects under ~20 faces are simply too coarse for centroid sampling to mean anything.
+**The signal that a bake genuinely missed an object is its atlas patch reading absolute zero**
+(max luma ~0.003 over its whole UV bbox) while a comparable sibling reads normally — a shadowed
+surface still catches bounce here, since the median lit texel is 0.23. That test found exactly one
+real miss (`cornice03_standard_standard_01.017`) out of 84 suspicious-looking objects. Cross-check
+against a sibling before touching anything.
+
+**Re-baking ONE object: `render.bake.use_clear` MUST be False, or you wipe the whole atlas.** It
+defaults to True and a single-object touch-up with it on destroys hours of work while looking like
+a normal bake. Confirm the fix afterwards by re-measuring an *untouched* neighbour as a control —
+if the neighbour is unchanged, `use_clear` behaved.
+
+**Post-bake, the BAKE_TARGET nodes are gone, so the "is every material armed?" sweep reads as 51/51
+broken.** They are stripped for export. Do not read that as a failed bake — corroborate against the
+atlas (lit fraction, per-object coverage) before believing it. To re-bake one object you must first
+put a target node back in *each* of its material slots, active AND selected.
+
+**★ `image.save()` USES THE DATABLOCK'S `file_format`, NOT THE FILE EXTENSION.** `LM_Factory` carried
+`OPEN_EXR`, so saving over `lightmap_4k.hdr` wrote an **OpenEXR file under a `.hdr` name** — 201 MB
+instead of 39 MB, and the loop loads it with `RGBELoader`, which reads Radiance only, so the scene
+would have shipped with no lightmap at all. Set `im.file_format = 'HDR'` *before* `save()`, then
+verify on disk: the first 10 bytes must be `#?RADIANCE` (an EXR starts `\x76\x2f\x31\x01`) and the
+size must land near 39 MB. Expect `max luma` to move a hair (12.9189 → 12.8741) — that is RGBE's
+8-bit mantissa, not a bad write.
+
+**Blender returns a FRESH wrapper each time you read `node_tree.nodes.active`, so `is` comparisons
+lie.** `nt.nodes.active = bt` followed by `assert nt.nodes.active is bt` fails on a correctly armed
+material. Compare `.name` instead. This one masquerades as the active-and-selected bug above.
+
+## Exporting the .glb — three traps that each cost a re-export
+
+- **`use_visible` reads VIEW-LAYER visibility, not `hide_render`.** Hiding the spare `Camera` via
+  `hide_render` did nothing and **two cameras shipped**; the loop's `if (o.isCamera) camera = o`
+  takes the LAST one, so the wrong camera can win. Use `obj.hide_set(True)`. Always assert the glb
+  contains exactly `["Cam_Loop_01"]`.
+- **★ THE EXPOSURE 5.0 IN `loops/factory` WAS FITTED AGAINST BRIGHTENED TEXTURES — read this before
+  re-grading.** Measured 2026-08-16: the Aug-14 build shipped WebP whose trim texture read **0.362**
+  against a source of **0.1105** — a **+0.2515 lift**. The JPEG path showed +0.267. So *every* build
+  before 2026-08-16 had albedo roughly a quarter too bright, and `EXPOSURE`/`LM_INTENSITY` were fitted
+  by eye on top of that. Once the textures are correct the scene reads markedly darker and genuinely
+  dark materials (the concrete columns, source mean 0.11 vs brick 0.40) go almost black — that is the
+  textures being *right*, not a new bug. **Re-fit the grade against `reference/dp_lighting_reference.png`
+  rather than against memory of the old build**, and note a plain exposure multiply will not reproduce
+  the old look: the bug was an additive lift in linear, so it raised blacks, which exposure does not.
+- **NEVER use `export_image_format='JPEG'` or `'WEBP'` — both write LINEAR values into an sRGB-tagged file.**
+  Measured 2026-08-16: every JPEG texture came out **+0.267 brighter** (door mean 0.30 → 0.57),
+  which reads as washed-out and blotchy. The control that proves it: an image that ships as PNG
+  round-trips with **exactly 0.0** error while the JPEGs do not. `'AUTO'` is correct but embeds
+  source PNGs losslessly — 337 MB. **The working recipe: pre-encode correct JPEGs yourself, point
+  the image nodes at them, and export with `'AUTO'` so the exporter just passes the bytes through.**
+  → 47.9 MB with a residual shift of −0.00025. Cache lives in `Assets_Created\_web_tex\`.
+  To write a correct JPEG from Blender you must build a **fresh unpacked image** —
+  `images.new()` → set `colorspace_settings` → `pixels.foreach_set(src_linear_buffer)` →
+  `file_format='JPEG'` → `filepath_raw` → `save(quality=90)`. Calling `save()` on the original
+  copies its **packed bytes** and silently writes a PNG with a `.jpg` name (76 MB, pixel-perfect —
+  which looks like success). `save_render()` is worse: it bakes the view transform in (+0.58).
+- **A colour Multiply behind the Base Color is DROPPED, and Blender will not emit `baseColorFactor`.**
+  `modular_factory_facade_windows` (the window trim/cornices) tints its diffuse by
+  **(0.0575, 0.0857, 0.045)** — the green. glTF has `baseColorFactor` for exactly this, but the
+  exporter writes `[1,1,1,1]` regardless; verified with both the new `ShaderNodeMix` and the legacy
+  `ShaderNodeMixRGB`, and a no-op Hue/Saturation node in the chain is not the cause.
+  **Do NOT bake the tint into the texture** — at a ~0.06 multiply the result lands in the near-black
+  end of 8-bit sRGB and comes back ~20% too dark. **Patch the GLB's JSON chunk after export instead**
+  (a float, so it is exact): set `materials[].pbrMetallicRoughness.baseColorFactor`, then rewrite the
+  container with recomputed chunk lengths (JSON chunk pads with `0x20`, BIN with `0x00`).
+  **This must be re-run after EVERY export** or the trim goes white again. Only this one material
+  needs it — a sweep of all 30 found no other dropped multiply.
+- **Do the strip-and-restore inside ONE `execute_blender_code` call.** Each call gets a fresh
+  namespace, so a saved-links list from a previous call is gone and the restore is unrecoverable —
+  and the strip also overwrites Roughness/Metallic *constants*, which no amount of re-linking gets
+  back. Record links AND constants, export, restore, all in one call, then assert zero failed
+  restores. (Blender's undo did recover it once, and left the lightmap UVs intact, but don't rely
+  on that.)
+- No Draco or Meshopt: `loops/factory/index.html` uses a bare `GLTFLoader` with no decoder
+  configured, so compressed geometry would fail to load.
 
 ## glTF carries ONE base-colour texture per material
 
@@ -236,6 +503,16 @@ the barrel already moved.
 - Storage is per browser: a teammate opening the same URL sees the clean scene. Notes
   are how the work travels.
 
+**Anything the SCENE drives must be locked with `userData.noMove`** (on the object or any
+ancestor) — a steered character, something on a path. It stays selectable and commentable,
+which is the point of the panel; it just loses the handles. Its transform is an *output*, so
+a dragged pose is not a suggestion, it is a value something overwrites. Worse, what gets
+picked is the mesh *inside* the driven node: the cat is a SkinnedMesh in a Group whose matrix
+the steering writes every frame, so a drag offsets the mesh **within** that group, the sim
+carries on driving the group, and the cat renders somewhere else entirely — persisted by node
+path and replayed on every load, with nothing in the sim to put it back. `restore()` prunes
+locked entries rather than skipping them, so a stored one heals on the next load.
+
 Two things in there are load bearing and will look like over-engineering until they
 bite. **The pivot binds the selection once** (each member's pose stored relative to it,
 every frame after is `pivotWorld * offset`) rather than re-measuring per drag — the
@@ -252,6 +529,30 @@ Only the loaded glTF is selectable — light shafts, dust and sky are excluded
 
 The dev server also sends `cache-control: no-store`, which fixes the stale-`.glb`
 trap that once cost an hour of debugging a scene that had already been re-exported.
+
+## Fly camera — `tools/flycam.js`
+
+WASD/QE movement layered **on top of** OrbitControls; drag still orbits, wheel still dollies.
+`createFlyCam({ camera, controls })`, then `fly.update(dt)` in the animation loop, before
+`controls.update()`. Wired into all three loops and exposed as `window.__fly`.
+W/S forward-back along the true view axis, A/D strafe, Q/E down/up, Shift ×4, Alt ×0.25.
+
+Four things it has to keep doing, each of which fails silently if broken:
+
+- **Translate `camera.position` AND `controls.target` by the same vector.** OrbitControls derives
+  its spherical from `position - target`, so moving only the camera makes it snap back the moment
+  the user drags. Keeping the offset constant also means you carry on orbiting whatever you flew to.
+- **Q/E travel along WORLD up, never camera up** — otherwise "up" tilts with the look direction and
+  you drift off the level you were inspecting.
+- **Bail out when `e.target` is an input/textarea/contenteditable, or `ctrlKey`/`metaKey` is held.**
+  Otherwise typing a review note flies the camera and Ctrl+Z gets eaten from the feedback panel.
+- **`dt` must come from successive `clock.getElapsedTime()` values.** `clock.getDelta()` returns ~0
+  here because `getElapsedTime()` already consumed the delta internally — the symptom is a fly
+  camera that initialises fine and simply never moves.
+
+Uses `e.code` (`KeyW`), not `e.key`, so it stays positional on AZERTY/QWERTZ. Keys are cleared on
+`blur`/`visibilitychange`, or a held key sticks when you alt-tab away mid-press. `dt` is clamped to
+0.1 s so the first frame back from a background tab doesn't teleport the camera.
 
 ## Stylised looks
 
@@ -333,6 +634,152 @@ compensate in the meantime.
 
 `window.__looks` exposes the api for scripted checks — thirteen fragment shaders is too many
 to eyeball, and a shader that fails to compile renders black rather than throwing.
+
+## Real-time lighting — `loops/factory-rt/`
+
+The whole factory lit live: no lightmap, no Blender bake. `tools/gi-volume.js` (bounce) and
+`tools/pcss.js` (shadows) are shared modules; the scene wires them together.
+
+**Bounce is an irradiance volume, not a lightmap.** A grid of probes through the building,
+each rendering a 16px cubemap of the room and squashing it to 4 spherical-harmonic
+coefficients per channel — an average brightness plus a direction. Surfaces look the grid up
+at their own position and normal. 924 probes over this building bakes in **9.4 s** and
+serialises to **29 KB**, shipped as `assets/factory/gi_volume.bin` and loaded instantly;
+`?gibake=1` forces a fresh one. Multi-bounce works by baking with the previous pass feeding
+the materials, so each pass REPLACES the grid rather than adding to it.
+
+**It lights moving objects, which a lightmap cannot.** The light is stored in the air, not
+painted on the walls, so anything can sample it — the cat included. Call `gi.patch(material)`
+on his materials and he picks up the bounce of wherever he is standing. The vertex patch runs
+after `<project_vertex>`, so it reads the SKINNED position and works on a SkinnedMesh.
+
+- **★ GLASS AND DECALS MUST NOT CAST SHADOWS, and this is what "the real-time lighting is
+  broken" actually looks like.** 48 glass panes each behaving like a lid means the sun never
+  enters the building — the room renders near-black and every dial you reach for is the wrong
+  one. Decals are the same trap wearing a different hat: light passes the glass and is then
+  stopped a millimetre later by a dirt quad. `NOCAST_RE = /glass|decal/i`; the hud prints the
+  non-caster count so a re-export that renames a material is visible immediately.
+- **★ NEVER HARDCODE A MEASURED LIGHT POSITION.** The previous rig carried the glazing
+  centre, the light ray and six shaft positions as constants read off the bake. The building
+  was re-exported with a second bay, all of them pointed at a skylight that had moved, and
+  the scene rendered black while looking like a shader bug. Everything is measured from the
+  .glb at load now — glass meshes are the apertures.
+- **The "flat panel" test for a roof light finds NOTHING here — the roof is PITCHED.** A
+  skylight's bounding box is 3.2 m tall despite being a flat pane, so `size.y < min(size.x,
+  size.z)` rejects it. Classify by HEIGHT instead: roof centres sit at 5.6 m, the arched wall
+  windows at 0.2 m.
+- **★ THE BAKE RE-RENDERS THE SHADOW MAP ONCE PER PROBE FACE UNLESS YOU STOP IT.** A probe is
+  six `renderer.render()` calls and each one rebuilds a 4096² shadow map over the whole
+  building. At 924 probes × 2 bounces that is 11,000 shadow passes for an answer that never
+  changes, because the sun does not move during a bake. `shadowMap.autoUpdate = false` +
+  `needsUpdate = true` for the first frame only. Without it the bake looks like an infinite hang.
+- **★ `setTimeout(0)` BETWEEN BAKE CHUNKS IS CLAMPED TO 1 Hz IN A BACKGROUND TAB.** Measured:
+  2.2% done after 35 seconds, i.e. a 26-minute bake, with no error anywhere. `MessageChannel`
+  is not clamped and runs at full speed whether the tab is in front or not. This also bites
+  any other chunked work in this repo.
+- **`LightProbeGenerator.fromCubeRenderTarget` is ASYNC and that is the whole cost.** It polls
+  a GPU fence on a 4 ms timer per face, so six faces cost ~25 ms of pure waiting per probe no
+  matter how small the cubemap is. The synchronous projector in `gi-volume.js` copies three's
+  conventions exactly and is **5.6× faster** (12,895 ms → 2,286 ms on the same 245 probes).
+  `gi.verifyProjection()` checks the two agree — it currently reads **maxDiff 0** on all four
+  coefficients, and that check is the only reason rolling our own is safe.
+- **Band-1 SH can ring NEGATIVE on the dark side of a strong gradient.** Left alone it
+  subtracts light and punches black holes in shadowed geometry. Clamp at zero in the shader.
+- **`giNormalBias` is the one dial that matters.** Probes that landed inside a wall are black;
+  a surface sampling its own wall picks them up as a dark rim. Stepping the lookup out along
+  the normal reads the probe in the room instead. Too high and light leaks through walls.
+  Default is 0.55 × probe spacing.
+- **PCSS needs `PCFShadowMap`, NOT `VSMShadowMap`.** It reads packed DEPTH to work out how far
+  away the blocker is; VSM stores depth MOMENTS, and reading those as a depth gives nonsense.
+  The old rig used VSM because it wanted a uniform blur — PCSS derives the blur, so that
+  reason is gone.
+- **Acne under PCSS shows up as RAINBOW BANDING on fine geometry** (the radiator fins), not
+  as the usual stripes, because the filter disc widens with blocker distance. `normalBias`
+  is the control; it is in world units. Current pair: 2 mm depth bias, 6 mm normal bias.
+- **★ `shadow.bias` IS IN NORMALISED DEPTH, SO ITS REAL SIZE DEPENDS ON THE SHADOW CAMERA —
+  THIS IS THE "SUN THROUGH THE WALLS" LIGHT LEAK.** It is a units bug, not a precision one.
+  `-0.0006` across the old 33 m shadow box was 2 cm; fitting the box to the whole building
+  took the range to 50 m and the SAME NUMBER became **3 cm**. Anything within 3 cm of its
+  blocker is then pushed in front of it and reads as lit, which draws a bright strip along
+  every wall/floor junction — and it looks exactly like a gap in the geometry. Measured sun
+  contribution at the junction, 6 cm out: **33 at -0.0006, 8 at 2 mm, 0 once normalBias came
+  down too.** Store the bias in METRES and divide by `far - near` in `aimSun()`, so
+  re-fitting the shadow box cannot silently change what it means.
+- **Sweep the parameter you actually suspect.** Two rounds were lost sweeping `normalBias`
+  (which changes this leak by ~6 out of 82) while never once sweeping `bias`, which was the
+  whole cause. And the first metrics — "brightest row", "top 1% of pixels" — measured the
+  brightest thing in the frame rather than the defect, and reported no change while the bug
+  sat in the picture. Probe the exact pixels, and A/B the one light you are blaming.
+- **Patching a three ShaderChunk is pinned-version territory.** `pcss.js` matches `getShadow`
+  in r169 by exact string and THROWS if it does not match, because a silent miss looks exactly
+  like "PCSS is on and does nothing".
+- **★ A LIGHT SHAFT IS A QUAD, AND YOU CAN SEE ITS EDGES — THAT IS THE "SHAFT SHADOWING THE
+  NEXT SHAFT" BUG (n011).** Where the quad passes through the floor it is sliced along a
+  dead straight line; where it ends against the haze of the neighbouring beam that step
+  reads as a shadow. It is strongly view-dependent because it is a silhouette. Diagnose it
+  by tinting each shaft group a different hue and taking ONE frame — the artifact then tells
+  you which beam it belongs to, which is far quicker than the three wrong guesses it took
+  here. The fix is **soft particles**: render the opaque scene into a depth texture first,
+  then fade each beam fragment as it approaches whatever is behind it (`uSoft`, in metres).
+  It needs its OWN target — sampling the depth of the buffer you are drawing into is a
+  feedback loop. Glass and the sky already carry `depthWrite:false` so beams pass through
+  them, which is what you want since every beam starts at a pane of glass. A near-fade
+  (`uNear`) handles walking *into* a beam, and widening the facing fade handles a beam
+  slicing open air, where there is no depth to fade against.
+- **★ THERE IS NO SUCH THING AS A DARK SHAFT — ADDITIVE BLENDING CANNOT DARKEN ANYTHING.**
+  If the room has dark diagonal bands running through it, you are looking at the GAPS
+  between bright beams, not at dark beams. Two causes, both fixed here:
+  **(a) spacing and width are not the same number.** Each beam fades to zero at its own left
+  and right edge, so laying them one width apart puts a trough at every seam. `sin(pi*u)`
+  neighbours sum flat at 50% overlap, so the plane must be TWICE the spacing.
+  **(b) the crossed second plane.** The pair existed so a beam never vanished edge-on, but
+  the perpendicular blade means a row of beams is a row of parallel sheets, and their
+  accumulated brightness ripples across the view. Replaced with ONE plane spun about the
+  beam axis to face the camera — a billboard constrained to one axis, so the beam still
+  points where the sun does. `shaftPlanes` is spun in the render loop.
+  Diagnose the whole family the same way: toggle shafts and dust off. If the bands vanish
+  it is the atmosphere; if they survive with the SUN's shadows off too, it was never a shadow.
+- **The shaft plane's UVs run the opposite way to how they read.** The quad is pushed down
+  by `len/2` from the glazing, so **`uv.y = 1` is the SKYLIGHT and `uv.y = 0` is the FLOOR**.
+  Fade "the end" toward 0. Getting it backwards dims the beam exactly where it should be
+  brightest, at the aperture — and looks enough like a lighting problem to send you off
+  re-fitting the sun.
+- **Never normalise a direction in the vertex shader and interpolate it.** Normalising is
+  not linear, so the interpolated value is not the direction. On a `PlaneGeometry` — four
+  vertices across an 11 m quad — the error is largest exactly where the plane is edge-on,
+  which is where a facing term matters. Interpolate the raw view-space position and
+  normalise per fragment.
+- **★ NO BACKTICKS INSIDE A GLSL TEMPLATE LITERAL.** A backtick in a `//` comment inside the
+  shader string closes the JS template literal, and the SyntaxError points at the next GLSL
+  word — "Unexpected identifier 'phi'", "Unexpected identifier 'd'" — nowhere near the actual
+  character. This has bitten twice, so there is now a guard: **`node tools/check-shaders.mjs`**,
+  which is worth running after any shader edit. Note the invariant it tests is "the literal
+  must not END on a comment line", not "the body contains a backtick" — the stray backtick is
+  what terminates the literal, so it is never *inside* the body. The first version of that
+  check looked in the body and passed a file that was genuinely broken.
+- **Both modules CHAIN `onBeforeCompile` rather than assigning it.** They patch the same
+  materials, and last-write-wins reads as "the GI works but the shadows are hard" (or the
+  reverse, depending on load order). Same for `customProgramCacheKey`.
+- **★ EXTRA COMPOSER PASSES HOLD THEIR OWN CAMERA REFERENCE.** `GTAOPass` captured the
+  placeholder camera at construction; the glTF camera replaced it on load, so the AO was
+  computed from a camera that never moved and painted a fixed smear across the screen.
+  `RenderPass` gets this right via `getCamera()` — everything else has to be told.
+- **`createLooks` SNAPSHOTS its volumetrics list at construction.** Anything added later
+  never responds to the toggle. Pass a permanent parent Group and fill it in afterwards.
+
+Measured on the loop camera, atmosphere off, so the numbers are lighting only:
+
+| | mean | sd | deep shadow |
+|---|---|---|---|
+| direct light only (GI off) | 25.5 | 22.6 | **47.3%** |
+| with the volume | 42.9 | 28.1 | **18.3%** |
+
+Deep shadow more than halves, and it does it with DIRECTION — the far bay has no skylight at
+all and is lit entirely by bounce arriving through the arched windows.
+
+**Still open:** the shafts and dust are still fitted to the old single-room export and want
+re-doing against two skylights (gain dropped 0.095 → 0.04 as a stopgap). And the volume has
+no probe-validity pass, so it leans on normal bias alone.
 
 ## Working rules
 
