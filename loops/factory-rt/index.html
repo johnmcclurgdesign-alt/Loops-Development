@@ -184,9 +184,9 @@
     // "restore" them to that on the grounds that it was the measured answer. The azimuth
     // moved 74°, which is why the shipped gi_volume.bin was re-baked with them.
     const RT_SUN_AZ = parseFloat(q.get('sunaz') ?? '143.28');
-    const RT_SUN_EL = parseFloat(q.get('sunel') ?? '52.208');
-    const RT_SUN    = parseFloat(q.get('sun')    ?? '2.639');
-    const RT_SKYL   = parseFloat(q.get('skyl')   ?? '3.2728');
+    const RT_SUN_EL = parseFloat(q.get('sunel') ?? '56.408');
+    const RT_SUN    = parseFloat(q.get('sun')    ?? '2.3094');
+    const RT_SKYL   = parseFloat(q.get('skyl')   ?? '0');
     // ★ 0.195 WAS FITTED AGAINST AN ENVIRONMENT MAP THAT WAS BLACK — see the PMREM far-plane
     // note below. The dial was multiplying zero, so ANY value looked the same and the number
     // means nothing. With the map actually rendering, the old 0.195 adds 11.6% to the frame
@@ -223,7 +223,7 @@
     // viewing distance — the AO is running, doing almost nothing, and reads as missing.
     // Radius is in WORLD units, so it has to be set against the size of the room. At the top
     // of the dial now, which is only usable because thickness tracks it — see RT_AOTHICK.
-    const RT_AORADIUS = parseFloat(q.get('aorad') ?? '5.0');
+    const RT_AORADIUS = parseFloat(q.get('aorad') ?? '4.9956');
     const RT_AOAMOUNT = parseFloat(q.get('aoamt') ?? '1.0');
     // ★ GTAO's `thickness` IS HOW DEEP AN OCCLUDER IS ASSUMED TO BE, AND LEAVING IT AT ITS
     // FIXED 1 m WHILE `radius` IS A DIAL IS WHY THE AO BREAKS UP PAST ~1.2 m. A sample that
@@ -242,8 +242,8 @@
     // of objects. These no longer track the wall values: dialled 2026-08-17 to roughly
     // double the wall reach and a third more depth, which is the point of splitting them —
     // the floor is the surface with room for a wide falloff, the walls want to stay open.
-    const RT_AOFRAD = parseFloat(q.get('aofrad') ?? '10.3');
-    const RT_AOFAMT = parseFloat(q.get('aofamt') ?? '1.31');
+    const RT_AOFRAD = parseFloat(q.get('aofrad') ?? '10.2973');
+    const RT_AOFAMT = parseFloat(q.get('aofamt') ?? '1.328');
     // The sun's angular RADIUS as a tangent — i.e. how big the source is in the sky, which
     // is what decides how fast a shadow softens with distance. The real sun is 0.0046;
     // this room is lit through a skylight the size of a bus, so it wants far more. Dialled
@@ -252,7 +252,7 @@
     const RT_SUNANG = parseFloat(q.get('sunang') ?? '0.0136');
     // GI. `gi` is the strength of the bounce, `gibias` how far along the normal a surface
     // reaches when it samples the volume (the light-leak / dark-rim control).
-    const RT_GI      = parseFloat(q.get('gi') ?? '0.2805');
+    const RT_GI      = parseFloat(q.get('gi') ?? '3.0');
     // ★ WAS 2.0, AND THAT WAS THE CORNER GLOW IN n018 BEING PAID FOR TWICE. With the old
     // sampler this dial was the only thing keeping a surface off the probe inside its own
     // wall, so it got pushed to 0.9 of a probe spacing — where it cannot win, because it
@@ -263,7 +263,7 @@
     // Dialled to 0 in the 2026-08-17 grade. That is defensible now in a way it was not
     // before: `givalid` below rejects the wall-cavity probes outright, so this dial is no
     // longer load bearing and the bounce reads tighter to the geometry without it.
-    const RT_GIBIAS  = parseFloat(q.get('gibias') ?? '0');
+    const RT_GIBIAS  = parseFloat(q.get('gibias') ?? '1.5');
     // How hard a surface refuses light from probes behind it. 0 is plain trilinear, i.e.
     // the pre-n018 sampler, kept dialable so the two can be compared rather than argued.
     // ★ THIS IS 0 BY ART DIRECTION, WHICH MEANS THE n018 VISIBILITY WEIGHT IS OFF. It was
@@ -279,7 +279,7 @@
     // can see and this is the cut-off: in-room probes measure 0.00, the offender 0.31,
     // fully outdoors 0.77-0.79. At 0.2 the floor profile goes flat (2.51 -> 0.97).
     // 0 disables the test, for the A/B.
-    const RT_GIVALID = parseFloat(q.get('givalid') ?? '0.2148');
+    const RT_GIVALID = parseFloat(q.get('givalid') ?? '0.2016');
     // ── the cat ─────────────────────────────────────────────────────────────
     // He is here to be LIT, not to perform: no steering, no state machine, one looping
     // clip. The point is that an irradiance volume can light a moving object and a
@@ -508,7 +508,7 @@
     // and the shafts are invisible, which is exactly what the first run rendered. Measured
     // frame means at this camera: 0.02 -> 68.7 (nothing), 0.12 -> beams read, 0.3 -> the
     // room is fog, 0.5+ -> white. 0.08 is the subtle end of usable.
-    volPass.uniforms.uDensity.value = parseFloat(q.get('voldens') ?? q.get('voldensity') ?? '0.0164');
+    volPass.uniforms.uDensity.value = parseFloat(q.get('voldens') ?? q.get('voldensity') ?? '0.0417');
     volPass.uniforms.uG.value       = parseFloat(q.get('volg') ?? '0.72');
 
     const looks = createLooks({
@@ -1074,13 +1074,18 @@
           scene.attach(camera);
         }
         if (q.get('nocontrols') !== '1') {
-          controls = new OrbitControls(camera, renderer.domElement);
-          controls.enableDamping = true;
           // Point the orbit target down the camera's OWN forward axis, so the opening
           // frame is exactly the Blender camera rather than being yanked to the origin.
+          // ★ The read must happen BEFORE the constructor: new OrbitControls() calls
+          // update(), which lookAt()s the DEFAULT target (the origin) — reading
+          // getWorldDirection afterwards captures the yanked aim, which is exactly
+          // the bug this comment thought it was preventing.
           const fwd = new THREE.Vector3();
           camera.getWorldDirection(fwd);
-          controls.target.copy(camera.getWorldPosition(new THREE.Vector3()).add(fwd.multiplyScalar(12)));
+          const eye = camera.getWorldPosition(new THREE.Vector3());
+          controls = new OrbitControls(camera, renderer.domElement);
+          controls.enableDamping = true;
+          controls.target.copy(eye).add(fwd.multiplyScalar(12));
           controls.update();
           fly = createFlyCam({ camera, controls });
           window.__fly = fly;
@@ -1106,7 +1111,14 @@
             bounces: GI_BOUNCES,
             // Additive fakes are not light. Integrating a light shaft into the probes
             // would feed its own glow back in as bounce and run away over passes.
-            exclude: [],
+            //
+            // ★ AND THE CAT MUST BE OUT OF IT, FOR BOTH REASONS AT ONCE. Correctness: a
+            // probe records the light in a piece of AIR, so baking a cat who is about to
+            // walk somewhere else leaves his silhouette in the room's bounce forever, and
+            // the volume is what LIGHTS him — bake him in and he shades himself. Speed: a
+            // bake is 924 probes x 6 faces = 5,544 renders, and a 51-bone skinned mesh with
+            // frustumCulled off is skinned in every one of them. Measured 123 s with him in.
+            exclude: [catRoot].filter(Boolean),
             onProgress: ({ done, total, bounce, bounces }) => {
               bakeTxt.textContent = `baking light — bounce ${bounce}/${bounces}`;
               bakeBar.style.width = `${(100 * (bounce - 1 + done / total) / bounces).toFixed(1)}%`;

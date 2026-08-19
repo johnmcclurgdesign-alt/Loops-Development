@@ -72,19 +72,28 @@
       <a class="notes" href="feedback/?project=dripping-pickle">notes</a>
     </div>
     <div class="grid">
-      <!-- The hero. Its thumbnail is a real capture of the scene at its own loop camera,
-           taken with tools/dev-server.mjs's /api/thumb — never a mock-up, so the card cannot
-           quietly start lying about what the build looks like. -->
-      <a class="card hero" href="loops/factory-rt/">
-        <!-- Not loading="lazy": this is the first thing on the page, so deferring it only
-             buys a flash of empty card. width/height are set so the layout doesn't jump. -->
-        <img class="thumb" src="assets/thumbs/dripping-pickle.jpg" alt=""
-             width="640" height="400">
+      <!-- The hero: the fresh production build off DP_Factory_Warehouse_Production.blend.
+           Structure collection only so far; props, lighting and atmosphere land in passes. -->
+      <a class="card hero" href="loops/warehouse/">
         <div class="body">
-          <div class="name">The Dripping Pickle</div>
-          <div class="desc">The factory interior, lit in real time.</div>
+          <div class="name">The Warehouse</div>
+          <div class="desc">The production build, lit live: probe-grid bounce, PCSS sun, measured skylights.</div>
           <span class="tag">Main scene</span>
         </div>
+      </a>
+
+      <!-- The two 2026-08 proofs of concept. Kept as REFERENCE — the production build
+           above replaces them, but their dialled lighting is worth opening side-by-side. -->
+      <a class="card" href="loops/factory-rt/">
+        <div class="name">The Dripping Pickle</div>
+        <div class="desc">Proof of concept: the factory interior, lit in real time.</div>
+        <span class="tag">Reference</span>
+      </a>
+
+      <a class="card" href="loops/factory-60/">
+        <div class="name">Factory — 60%</div>
+        <div class="desc">Proof of concept: the room at the reduced architectural scale.</div>
+        <span class="tag">Reference</span>
       </a>
 
       <a class="card" href="loops/cat-sequencer/">

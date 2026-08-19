@@ -1,0 +1,217 @@
+[
+  {
+    "id": "n001",
+    "status": "closed",
+    "loop": "factory-rt",
+    "at": "2026-08-14T23:27:14.911Z",
+    "object": "Sign_DrippingPickle",
+    "material": "M_Sign_DrippingPickle",
+    "point_blender": [
+      3.437,
+      -1.002,
+      0.421
+    ],
+    "comment": "test test test. Hello claude i'm John",
+    "camera": {
+      "position": [
+        -9.984,
+        0.053,
+        0.622
+      ],
+      "fov": 38.96,
+      "aspect": 1.7669,
+      "target": [
+        1.993,
+        -0.011,
+        -0.124
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-9.984%2C0.053%2C0.622&tgt=1.993%2C-0.011%2C-0.124&sel=Sign_DrippingPickle&review=1",
+    "shot": "shots/n001.jpg",
+    "resolution": "test note, not a real issue",
+    "updated": "2026-08-17T04:08:39.894Z",
+    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)",
+    "deleted_at": "2026-08-17T16:54:09.802Z"
+  },
+  {
+    "id": "n009",
+    "status": "open",
+    "loop": "factory-rt",
+    "at": "2026-08-17T03:06:15.469Z",
+    "object": "Column006",
+    "objects": [
+      "Column006"
+    ],
+    "material": "modular_factory_facade_trim_01",
+    "point_blender": [
+      -1.991,
+      3.685,
+      0.148
+    ],
+    "edits": [],
+    "comment": "Black column should be concrete so our texture is not displaying correctly.",
+    "camera": {
+      "position": [
+        -12.034,
+        0.458,
+        4.574
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.938,
+        -0.905,
+        -3.748
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.034%2C0.458%2C4.574&tgt=2.938%2C-0.905%2C-3.748&sel=Column006&review=1",
+    "shot": "shots/n009.jpg",
+    "deleted_at": "2026-08-18T19:29:44.629Z"
+  },
+  {
+    "id": "n012",
+    "status": "open",
+    "loop": "factory-rt",
+    "at": "2026-08-17T03:14:51.565Z",
+    "object": "SM_DPW_Ground_001",
+    "objects": [
+      "SM_DPW_Ground_001"
+    ],
+    "material": "Old wooden floor",
+    "point_blender": [
+      -5.494,
+      0.654,
+      -2.284
+    ],
+    "edits": [],
+    "comment": "Floor texture is very soft. This cause an issue when it's close to the brick wall which is much crisper and detailed.",
+    "camera": {
+      "position": [
+        -11.536,
+        -0.005,
+        4.217
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        2.72,
+        -2.184,
+        -3.432
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-11.536%2C-0.005%2C4.217&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
+    "shot": "shots/n012.jpg",
+    "deleted_at": "2026-08-18T19:29:45.415Z"
+  },
+  {
+    "id": "n015",
+    "status": "open",
+    "loop": "factory-rt",
+    "at": "2026-08-17T03:20:35.996Z",
+    "object": "Cube001_1",
+    "objects": [
+      "Cube001_1"
+    ],
+    "material": "modular_factory_facade_doors",
+    "point_blender": [
+      -6.112,
+      3.922,
+      -0.042
+    ],
+    "edits": [],
+    "comment": "Door beam also rendering very dark",
+    "camera": {
+      "position": [
+        -9.981,
+        0.232,
+        1.856
+      ],
+      "fov": 40.53,
+      "aspect": 1.6929,
+      "target": [
+        -4.957,
+        -1.418,
+        -4.645
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
+    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-9.981%2C0.232%2C1.856&tgt=-4.957%2C-1.418%2C-4.645&sel=Cube001_1&review=1",
+    "shot": "shots/n015.jpg",
+    "deleted_at": "2026-08-18T19:29:45.884Z"
+  },
+  {
+    "id": "n019",
+    "status": "open",
+    "loop": "factory-60",
+    "at": "2026-08-18T00:33:12.232Z",
+    "object": "Column024",
+    "objects": [
+      "Column024"
+    ],
+    "material": "modular_factory_facade_trim_01_60",
+    "point_blender": [
+      1.958,
+      2.211,
+      0.194
+    ],
+    "edits": [],
+    "comment": "there are rendering way to bright now.",
+    "camera": {
+      "position": [
+        -7.539,
+        0.053,
+        1.533
+      ],
+      "fov": 29.24,
+      "aspect": 2.2197,
+      "target": [
+        4.243,
+        -0.217,
+        -0.727
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-60/",
+    "view": "http://localhost:5173/loops/factory-60/?cam=-7.539%2C0.053%2C1.533&tgt=4.243%2C-0.217%2C-0.727&sel=Column024&review=1",
+    "shot": "shots/n019.jpg",
+    "deleted_at": "2026-08-18T19:29:46.277Z"
+  },
+  {
+    "id": "n020",
+    "status": "open",
+    "loop": "factory-60",
+    "at": "2026-08-18T00:35:24.345Z",
+    "object": "wall_standard_standard_01025",
+    "objects": [
+      "wall_standard_standard_01025"
+    ],
+    "material": "modular_factory_facade_brick_60",
+    "point_blender": [
+      2.149,
+      -1.987,
+      -0.129
+    ],
+    "edits": [],
+    "comment": "the scene got much dark are the baked textures the same colors as the 100% scale versions?",
+    "camera": {
+      "position": [
+        -7.706,
+        0.677,
+        0.534
+      ],
+      "fov": 29.24,
+      "aspect": 2.2197,
+      "target": [
+        4.285,
+        0.417,
+        0.941
+      ]
+    },
+    "url": "http://localhost:5173/loops/factory-60/",
+    "view": "http://localhost:5173/loops/factory-60/?cam=-7.706%2C0.677%2C0.534&tgt=4.285%2C0.417%2C0.941&sel=wall_standard_standard_01025&review=1",
+    "shot": "shots/n020.jpg",
+    "deleted_at": "2026-08-18T19:29:46.642Z"
+  }
+]

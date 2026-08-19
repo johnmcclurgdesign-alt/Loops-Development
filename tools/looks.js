@@ -691,22 +691,42 @@ export const LOOKS = [
     extra: { uGrid: { value: 26 } } },
 ];
 
-/**
- * @param {{ renderer, scene, camera, mount?: HTMLElement, initial?: string, menu?: boolean }} opts
- */
+// Group icons — small inline SVGs so the panel needs no font or asset. A scene can
+// reference these by key in its `groups` list, or hand over a raw '<svg …>' string.
+export const ICONS = {
+  style: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2.5 6.8 8.7"/><path d="M6.2 9.3c-1.6-.2-2.3 1.3-4 1.8 1 1.9 4.3 2.6 5.4.4.5-1-.3-2-1.4-2.2z"/></svg>',
+  image: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.5"/><circle cx="11" cy="8" r="1.5"/><circle cx="4.5" cy="11.5" r="1.5"/></svg>',
+  atmosphere: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="5.5" r="2.4"/><path d="M2.5 10.5h11M4.5 13h7"/></svg>',
+  light: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>',
+  camera: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="1.6" y="4.6" width="12.8" height="8.8" rx="1.6"/><circle cx="8" cy="9" r="2.6"/><path d="M5.2 4.6 6.2 2.6h3.6l1 2"/></svg>',
+  finish: '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 2.2 9.4 6.6 13.8 8 9.4 9.4 8 13.8 6.6 9.4 2.2 8 6.6 6.6Z"/></svg>',
+};
+
 /**
  * @param {object} opts
  * @param {Array} [opts.volumetrics]  objects the Volumetrics toggle hides
- * @param {Array} [opts.dials]        [{ label, min, max, step, value, onInput, curve }] —
+ * @param {Array} [opts.dials]        [{ label, min, max, step, value, onInput, curve, group, volTied }] —
  *   generic on purpose. This module is shared across loops and must not know what a light
  *   shaft is; the scene owns the meaning and hands over a setter. `curve` > 1 spends more
  *   of the slider on the low end, which is where a gain is actually dialled in.
- * @param {Array} [opts.choices]      [{ label, value, options:[{label,value}], onChange }] —
+ * @param {Array} [opts.choices]      [{ label, value, options:[{label,value}], onChange, group }] —
  *   same contract, for things that pick from a set rather than slide.
+ * @param {Array} [opts.groups]       [{ id, label, icon }] — optional. When given, the panel
+ *   renders these collapsible groups in order and each dial/choice lands in its `group`
+ *   (falling back to the last group). Built-ins: Look/Strength/Blend go to a group with
+ *   id 'style' (else the first group); the exposure row goes where `opts.exposure` says.
+ *   `icon` is a key into ICONS or a raw '<svg …>' string. Without `groups` the panel keeps
+ *   the classic Style / Image / Atmosphere layout, so the other loops are untouched.
+ * @param {boolean} [opts.tone]       false hides the tone-mapping dropdown. The `tone` URL
+ *   key keeps working either way — the control stays registered, it just has no row, so a
+ *   shared link from the old panel still restores the image.
+ * @param {object} [opts.exposure]    { group, label } — where the exposure slider lives and
+ *   what it is called ('Brightness' faces a reviewer better than 'Exposure').
  */
 export function createLooks({ renderer, scene, camera, getCamera, initial = 'original', menu = true,
                               volumetrics = [], volumetricsOn = true, dials = [], choices = [],
-                              extraPasses = [], msaa = 4 } = {}) {
+                              extraPasses = [], finalPasses = [], msaa = 4,
+                              groups = null, tone = true, exposure = null } = {}) {
   // A scene can swap its camera after load (the factory adopts the glTF's own camera), so
   // the live one is fetched per frame rather than captured once into the RenderPass.
   const cameraOf = typeof getCamera === 'function' ? getCamera : () => camera;
@@ -735,6 +755,9 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
   // Scene-supplied passes that belong BEFORE the style passes — an ambient-occlusion pass
   // is part of the render, not a stylisation, so a look should composite over its result.
   for (const pass of extraPasses) if (pass) composer.addPass(pass);
+  // A scene pass that REPLACES the render (n8ao renders the scene itself) makes
+  // the RenderPass a pure waste of a full scene draw — the scene disables it via
+  // this handle after wiring such a pass first in extraPasses.
 
   const passes = new Map();
   for (const look of LOOKS) {
@@ -750,6 +773,11 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
   }
   const output = new OutputPass();
   composer.addPass(output);
+  // AFTER OutputPass — for passes that want the final display-referred image.
+  // SMAA lives here: its edge detection is designed for tone-mapped LDR, and
+  // n8ao's own scene render bypasses hardware MSAA entirely (the n8ao README
+  // is explicit: hardware AA does not work with the AO; use SMAA).
+  for (const pass of finalPasses) if (pass) composer.addPass(pass);
 
   let current = LOOKS.some(l => l.id === initial) ? initial : 'original';
 
@@ -804,7 +832,7 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
   // of the way of the thing it is adjusting.
 
   const PANEL_CSS = `
-    #looks { position: fixed; left: 14px; bottom: 14px; z-index: 9998; width: 268px;
+    #looks { position: fixed; left: 14px; bottom: 14px; z-index: 9998; width: 282px;
       font: 12px/1.5 ui-monospace, Consolas, monospace; color: #dfe3ea;
       background: rgba(16,18,23,.94); border: 1px solid #2b3140; border-radius: 10px;
       backdrop-filter: blur(6px); box-shadow: 0 10px 30px rgba(0,0,0,.5); }
@@ -814,10 +842,19 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
     #looks[data-open="0"] header { border-bottom: none; }
     #looks[data-open="0"] .body { display: none; }
     #looks .body { padding: 4px 12px 12px; max-height: 62vh; overflow-y: auto; }
-    #looks h3 { margin: 10px 0 5px; font-size:9.5px; letter-spacing:.14em;
-      text-transform:uppercase; color:#5f6880; font-weight:500; }
+    #looks .grp { border-top: 1px solid #232936; margin-top: 7px; }
+    #looks .grp:first-child { border-top: none; margin-top: 0; }
+    #looks .grp > .ghead { display:flex; align-items:center; gap:7px; padding:8px 0 4px;
+      font-size:9.5px; letter-spacing:.14em; text-transform:uppercase; color:#8b93a7;
+      cursor:pointer; user-select:none; }
+    #looks .grp > .ghead:hover { color:#c3c9d6; }
+    #looks .grp > .ghead svg { flex:0 0 auto; opacity:.85; }
+    #looks .grp > .ghead .chev { margin-left:auto; color:#5f6880; font-size:10px;
+      transition: transform .15s ease; }
+    #looks .grp[data-open="0"] > .ghead .chev { transform: rotate(-90deg); }
+    #looks .grp[data-open="0"] > .gbody { display:none; }
     #looks .row { display:flex; align-items:center; gap:8px; min-height: 24px; }
-    #looks .row > .k { flex: 0 0 76px; color:#8b93a7; font-size:11px; }
+    #looks .row > .k { flex: 0 0 88px; color:#8b93a7; font-size:11px; }
     #looks .row > .c { flex: 1; display:flex; align-items:center; gap:6px; min-width: 0; }
     #looks .row .v { flex: 0 0 40px; text-align:right; color:#dfe3ea; font-size:11px; }
     #looks select { width:100%; min-width:0; background:#0e1116; color:#dfe3ea;
@@ -856,9 +893,7 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
       <header><span>look</span><button class="hdr-btn" id="looks-collapse"
         title="Hide the panel" aria-label="Hide the panel">&minus;</button></header>
       <div class="body">
-        <h3>Style</h3><div id="looks-style"></div>
-        <h3>Image</h3><div id="looks-image"></div>
-        <h3>Atmosphere</h3><div id="looks-atmos"></div>
+        <div id="looks-groups"></div>
         <div class="foot">
           <button id="looks-copy" class="primary">Copy settings</button>
           <button id="looks-reset">Reset</button>
@@ -866,11 +901,38 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
         <div class="msg" id="looks-msg"></div>
       </div>`;
     document.body.appendChild(box);
-
-    const secStyle = box.querySelector('#looks-style');
-    const secImage = box.querySelector('#looks-image');
-    const secAtmos = box.querySelector('#looks-atmos');
     const copyMsg = box.querySelector('#looks-msg');
+
+    // ---- groups -------------------------------------------------------------
+    // Scenes that pass no `groups` get the classic three, so the factory and cat
+    // loops keep their layout with only the chrome (icons, collapse) upgraded.
+    const custom = !!(groups && groups.length);
+    const groupDefs = custom ? groups : [
+      { id: 'style', label: 'Style', icon: 'style' },
+      { id: 'image', label: 'Image', icon: 'image' },
+      { id: 'atmosphere', label: 'Atmosphere', icon: 'atmosphere' },
+    ];
+    const groupsRoot = box.querySelector('#looks-groups');
+    const secOf = {};
+    for (const g of groupDefs) {
+      const grp = document.createElement('div');
+      grp.className = 'grp';
+      grp.dataset.open = '1';
+      const icon = g.icon && (ICONS[g.icon] || (String(g.icon).startsWith('<svg') ? g.icon : ''));
+      grp.innerHTML = `<div class="ghead">${icon || ''}<span>${g.label}</span>` +
+                      `<span class="chev">&#9662;</span></div><div class="gbody"></div>`;
+      grp.querySelector('.ghead').addEventListener('click', () => {
+        grp.dataset.open = grp.dataset.open === '1' ? '0' : '1';
+      });
+      groupsRoot.appendChild(grp);
+      secOf[g.id] = grp.querySelector('.gbody');
+    }
+    const firstSec = secOf[groupDefs[0].id];
+    const lastSec = secOf[groupDefs[groupDefs.length - 1].id];
+    const secStyle = secOf.style || firstSec;
+    const secImage = secOf.image || secOf[exposure?.group] || firstSec;
+    const secAtmos = secOf.atmosphere || lastSec;
+    const sectionFor = (item) => secOf[item.group] || secAtmos;
 
     box.querySelector('#looks-collapse').addEventListener('click', (e) => {
       const open = box.dataset.open === '1';
@@ -951,17 +1013,24 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
       ['Linear', THREE.LinearToneMapping],
       ['None', THREE.NoToneMapping],
     ];
-    const toneSel = document.createElement('select');
-    for (const [name, val] of TONES) {
-      const o = document.createElement('option');
-      o.value = String(val); o.textContent = name;
-      toneSel.appendChild(o);
+    if (tone !== false) {
+      const toneSel = document.createElement('select');
+      for (const [name, val] of TONES) {
+        const o = document.createElement('option');
+        o.value = String(val); o.textContent = name;
+        toneSel.appendChild(o);
+      }
+      toneSel.value = String(renderer.toneMapping);
+      toneSel.addEventListener('change', () => { renderer.toneMapping = parseInt(toneSel.value, 10); });
+      row(secImage, 'Tone', toneSel);
+      controls.push({ key: 'tone', get: () => toneSel.value,
+                      set: (v) => { toneSel.value = v; toneSel.dispatchEvent(new Event('change')); } });
+    } else {
+      // No row, but the URL key keeps working — a link shared from the old panel
+      // (or a scripted A/B) still lands on the same image.
+      controls.push({ key: 'tone', get: () => String(renderer.toneMapping),
+                      set: (v) => { renderer.toneMapping = parseInt(v, 10); } });
     }
-    toneSel.value = String(renderer.toneMapping);
-    toneSel.addEventListener('change', () => { renderer.toneMapping = parseInt(toneSel.value, 10); });
-    row(secImage, 'Tone', toneSel);
-    controls.push({ key: 'tone', get: () => toneSel.value,
-                    set: (v) => { toneSel.value = v; toneSel.dispatchEvent(new Event('change')); } });
 
     const expInput = document.createElement('input');
     expInput.type = 'range'; expInput.min = '0.1'; expInput.max = '10'; expInput.step = '0.1';
@@ -971,7 +1040,7 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
       renderer.toneMappingExposure = parseFloat(expInput.value);
       expV.textContent = (+expInput.value).toFixed(1);
     });
-    row(secImage, 'Exposure', expInput, expV);
+    row(secOf[exposure?.group] || secImage, exposure?.label ?? 'Exposure', expInput, expV);
     controls.push({ key: 'exp', get: () => expInput.value,
                     set: (v) => { expInput.value = v; expInput.dispatchEvent(new Event('input')); } });
 
@@ -989,7 +1058,11 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
     // Scene-supplied dials. Each look pushes the volumetrics around differently - a
     // halftone screens them into dots, Kuwahara smears them into a haze - so the levels
     // that read well are per-look, not global.
-    for (const d of dials) {
+    //
+    // `volTied` marks a control the ?vol=0 switch should grey out. Legacy panels tied
+    // every dial (they were all atmosphere); a grouped panel has Sun and Focal dials
+    // that have nothing to do with the volumetrics, so there it is opt-in.
+    const renderDial = (d) => {
       const fmt = (v) => ((d.max - d.min) <= 0.5 ? v.toFixed(3) : v.toFixed(2));
       const curve = d.curve && d.curve !== 1 ? d.curve : 0;
       const toValue = (t) => d.min + (d.max - d.min) * Math.pow(t, curve);
@@ -1017,8 +1090,8 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
         vOut.textContent = fmt(val);
         d.onInput(val);
       });
-      row(secAtmos, d.label, input, vOut);
-      dialInputs.push(input);
+      row(sectionFor(d), d.label, input, vOut);
+      if (d.volTied ?? !custom) dialInputs.push(input);
       if (d.id) {
         controls.push({ key: d.id,
           get: () => (curve ? toValue(parseFloat(input.value)) : parseFloat(input.value)).toFixed(4),
@@ -1027,9 +1100,9 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
             input.dispatchEvent(new Event('input'));
           } });
       }
-    }
+    };
 
-    for (const c of choices) {
+    const renderChoice = (c) => {
       const sel = document.createElement('select');
       for (const o of c.options) {
         const opt = document.createElement('option');
@@ -1038,13 +1111,20 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
       }
       sel.value = String(c.value);
       sel.addEventListener('change', () => c.onChange(sel.value));
-      row(secAtmos, c.label, sel);
-      dialInputs.push(sel);
+      row(sectionFor(c), c.label, sel);
+      if (c.volTied ?? !custom) dialInputs.push(sel);
       if (c.id) {
         controls.push({ key: c.id, get: () => sel.value,
                         set: (v2) => { sel.value = v2; sel.dispatchEvent(new Event('change')); } });
       }
-    }
+    };
+
+    // Grouped panels render choices first: a group's dropdown (a lens format, a mode)
+    // is the coarse pick its dials then refine — and registering it first also means a
+    // settings URL replays it BEFORE the fine dials, so the dials win, not the preset.
+    // Legacy panels keep their historical dials-then-choices order.
+    if (custom) { choices.forEach(renderChoice); dials.forEach(renderDial); }
+    else { dials.forEach(renderDial); choices.forEach(renderChoice); }
     syncDials();
 
     // ---- share --------------------------------------------------------------

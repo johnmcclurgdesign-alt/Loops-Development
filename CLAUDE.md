@@ -318,6 +318,78 @@ anything the team opens on arbitrary browsers. Site chrome only, never a loop.
 Installing is manual — `shadcn add` expects a framework project with a build step.
 Read the vanilla source from the registry and fit it by hand. Do not add a bundler.
 
+## Scaling the building — `Scene_60`
+
+The room was authored too large. `Scene_60` is the whole scene at **0.6**. Floor-to-apex
+went 10.79 m → 6.48 m; against a 1.745 m figure that is **6.18 people tall → 3.71**. `loops/factory-60/` is the
+matching web loop and loads its own `assets/factory/factory_60.glb`.
+
+**Judge scale against a figure you have MEASURED.** The reference figure was **1.531 m** — a
+10% short adult — and 55% "felt right" against it. Re-checked against a correct 1.745 m
+person, the answer was 60%. A yardstick that is 10% short biases every scale call you make.
+
+**Doors and the figure are the exceptions, kept at 1.0.** A door is a real object; uniform
+scaling takes it to 1.28 m at 55%, shorter than the person walking through it. Only one door
+is placed in the scene, so this is two objects, not a policy. The result reads better than
+before: 2.33 m in a 2.85 m wall, where it used to be 2.33 m in a 4.75 m one.
+
+**★ THE WALL BRICK IS UV-DRIVEN AND THE SIGN'S BRICK IS WORLD-PROJECTED, SO A SCALE CHANGE
+MOVES ONE AND NOT THE OTHER.** `modular_factory_facade_brick` runs `Texture Coordinate → UV →
+Mapping`, so its brick shrinks with the geometry (course **76.9 mm → 46.2 mm** at 0.6).
+`M_Sign_DrippingPickle` builds its own lookup from `Geometry → Position` through the
+`Combine XYZ` chain, so it does not move at all — it stays at whatever `Math.002`/`Math.003`
+(labelled "U along wall" / "V from height") multiply by. They are a **matched pair**: the
+sign's mortar dropout, per-brick wear and fade-into-brick all land on phantom bricks the
+moment the two disagree. Keep `1 / multiplier == the wall's tile size in metres`. At 100%
+that is 0.33333 (3 m tile, 76.9 mm courses); `Scene_60` uses **0.55555** (1.8 m tile,
+46.2 mm) in `M_Sign_DrippingPickle_60`. **Re-fit the sign whenever you re-fit the wall** —
+and note reverting only one half of the pair is how they drifted apart the first time.
+
+**★ YOU CANNOT CHANGE BRICK DENSITY BY SCALING THESE UVs — EVERY MODULE IS UNWRAPPED 0..1 ON
+ITS OWN.** At Mapping scale 1.0 each wall module shows exactly one whole tile, so the pattern
+completes at the module edge and reads continuous. At 0.6 each module shows `u ∈ [0, 0.6]`
+and the next restarts at 0, which puts a **visible seam on every wall section edge**. It is
+arithmetic, not tuning: seamlessness needs a whole number of tiles per module, so the scale
+must be an integer — and every integer (1, 2, 3…) makes bricks *smaller*. There is no factor
+that enlarges them and stays seamless. Two real fixes: **re-crop the brick texture** so one
+tile holds fewer, larger bricks (one 1.8 m tile at 24 courses = exactly 75 mm; the crop must
+be an EVEN number of courses or the stretcher bond flips at the seam, and must land on whole
+brick columns), or **re-project the module UVs in world space** so density stops depending on
+module size. Measured: 15 of 29 materials are UV-driven and all of them shrink this way.
+
+**★ `Scene` IS GONE — EDIT MATERIALS IN PLACE NOW.** Work moved to
+`Assets_Created/DP_Factory_Warhouse_60.blend` and the full-size `Scene` was deleted from it on
+2026-08-17, so `Scene_60` is the only scene and every material has exactly one scene using it.
+The 12 that used to be shared (`M_DPW_Glass`, `M_DPW_Metal`, `Concrete used`, `SteelN`,
+`M_WindowBar`, `M_Conduit_Galv_Boxes`, `M_DPW_DirtDecal`, `M_DPW_Paint`, `M_DPW_PlasterWhite`,
+`M_DPW_Rubber`, `M_DPW_MetalRust_01/02`) are safe to edit directly. **The `_60` suffix on the
+other 16 is now vestigial** — it records that they were once copies, not that a twin still
+exists, so do not duplicate again before editing. The original two-scene file
+(`DP_Factory_Warhouse.blend`) still has both if the full-size room is ever wanted back.
+
+**Object copies share MESH DATA unless you say otherwise, and Edit Mode does not warn you.**
+`Scene_60` was built with `o.copy()`, which shares data — that is why it cost 8 MB and not
+another 2.8 GB. Cutting a door hole in a wall there would have cut it in `Scene` too (moot now
+that `Scene` is deleted, but this is why the copies were made single-user). All 227
+are single-user now (cost: **14.8 MB**, 100k verts — the 2.8 GB is packed textures, not mesh).
+The camera was in that set: shared camera data means a lens change re-frames both scenes.
+Check with the objects holding a datablock, not `.users` — a count of 2 does not say who.
+
+**★ DUPLICATING A COLLECTION LEAVES ANYTHING PARKED IN THE SCENE ROOT BEHIND.** `Scene_60`
+was made by copying `Collection 1` → `Collection 1 @60`, so the four objects sitting loose in
+`Scene`'s root were never picked up: **`Lowpoly Girl Standing`** — the 1.745 m scale yardstick
+this whole section is measured against — plus one `cable_10cm` segment and its two sockets.
+Nothing warns; the object counts (406 vs 397) look like ordinary noise. They went with `Scene`
+when it was deleted. **Before deleting a scene, diff the two by base name** (strip `.NNN` and
+`_60`), don't just compare totals. Recover them from `DP_Factory_Warhouse.blend` if the
+yardstick is wanted back.
+
+**Saving warns "Unable to pack file" for two book textures — that is not a failed save.**
+`bpy.data.use_autopack` is on and `book a bump.jpg` / `book a norm.jpg` are missing from disk,
+so `save_mainfile()` raises while still writing the file. Check `bpy.data.is_dirty` and the
+file's mtime rather than trusting the exception. Both belong to a material literally named
+`Material` (an old leather book) that `Scene_60` does not use.
+
 ## Baking lightmaps out of Blender — the traps
 
 Learned the hard way on `loops/factory`. Every one of these fails **silently**.
@@ -483,6 +555,30 @@ material. Compare `.name` instead. This one masquerades as the active-and-select
   on that.)
 - No Draco or Meshopt: `loops/factory-rt/index.html` uses a bare `GLTFLoader` with no decoder
   configured, so compressed geometry would fail to load.
+- **`tools/glb-basecolor.mjs` is the baseColorFactor patch above, as a tool.** Run it after every
+  export: `node tools/glb-basecolor.mjs in.glb out.glb --set "MatName=r,g,b"`. It **exits non-zero
+  if a named material is missing**, which is the point — the material is `modular_factory_facade_windows`
+  in `Scene` but `..._windows_60` in `Scene_60`, and a silent skip is how the trim ships white.
+  Verified live: the exporter had written `[1,1,1,1]` both times.
+- **The working export order is AUTO → `glb-webp.mjs` → `glb-basecolor.mjs`.** `'AUTO'` passes the
+  source bytes through untouched (572 MB), `glb-webp.mjs` re-encodes with ffmpeg *outside* Blender
+  to dodge the linear-into-sRGB bug, and the baseColor patch goes last so the container rewrite
+  cannot undo it. Measured on `Scene_60`: 572 MB → **54.7 MB**, textures 528.6 → 37.5 MB.
+- **★ MOST "More than one shader node tex image" WARNINGS ARE THE UNCONNECTED `BAKE_TARGET`, NOT A
+  DROPPED COMPOSITE.** Triage instead of panicking: count the image nodes whose outputs are actually
+  LINKED. Four of five warnings on the `Scene_60` export were materials carrying an inert
+  `Lightmap_4K_bake` node (`M_Conduit_Galv_Boxes`, `Rust metal`, `Concrete used`, `M_DPW_Glass`).
+  The real one was `M_Sign_DrippingPickle` — **six image nodes, all six linked**. glTF took the logo
+  as `baseColorTexture` and dropped the brick composite, so the sign exports as a CLEAN decal with
+  no mortar dropout and no per-brick wear. It needs the bake in the section below, and the shipped
+  `assets/factory/sign_*.png` are the old logo, so they cannot stand in.
+- **The exported camera fov does NOT follow the render resolution.** `sensor_fit` is `HORIZONTAL`,
+  so Blender preserves horizontal fov and only redistributes it between `yfov` and `aspectRatio`.
+  Changing the render aspect 16:9 → 1:1 moved the exported hFov by exactly nothing (60.14° both
+  times). If two loops frame differently, compare the CAMERA DATA (`lens`, `sensor_width`), not the
+  render settings: every camera in the blend is 19 mm on a 22 mm sensor = **60.14°**, while the
+  older `factory.glb` still carries **64.01°** — that asset predates a camera change and is the
+  stale one.
 
 ## glTF carries ONE base-colour texture per material
 
@@ -525,6 +621,196 @@ signal you get.
 - **Exposure will not match Blender.** Blender's ACES 1.3 + gamma 1.3 lifts shadows; three's
   `ACESFilmicToneMapping` is a four-line approximation with no lift. Expect to fit exposure
   by eye (we landed on 5.0 against Blender's 2.5) and to need a grading pass for the darks.
+
+## The warehouse build — export ritual and the mural
+
+The production scene is `Assets_Created/DP_Factory_Warehouse_Production.blend` (Scene_60,
+Structure + Props collections). The web loop is `loops/warehouse/`.
+
+- **★ EXPORT VIA `tools/blender-export-warehouse.py` (run inside Blender), NEVER by hand.**
+  The pickle mural on the gable wall is a LIVE node mix in `M_Brick_Mural_60` — brick bake ×
+  painted layer × a `MuralFade` Value node the artist dials in Blender — and glTF carries one
+  base-colour image per material, so the script flattens the mix at the current fade, exports,
+  and restores the live graph. A hand export ships whichever single image the exporter picks.
+  Then finish outside Blender: `glb-webp.mjs` → `glb-basecolor.mjs` with the factors from
+  `assets/warehouse/export-factors.json`, which the export script rewrites on every run —
+  the windows tint plus any Brightness/Contrast dial an artist parks in front of a Base
+  Color texture (folded into baseColorFactor when it is a pure multiply in linear; the
+  script WARNS when the dial has a constant offset and cannot ship as a factor).
+  The flattened PNG `assets/warehouse/brick_mural_wall.png` is load-bearing.
+- **★ THE WALL MODULES' UV ISLANDS OVERLAP — 570 OF 644 OCCUPIED CELLS ON THE MURAL WALL ARE
+  CLAIMED BY MORE THAN ONE FACE.** Any bake into a wall's own `UVMap` therefore paints onto
+  every face sharing those texels: the first mural attempt appeared three times, chopped
+  mid-letter. The fix is a dedicated non-overlapping layer (`MuralUV`, planar by world y/z
+  over the mural region) on the 782 mural faces, which carry their own material slot. That
+  layer exports as `TEXCOORD_2` (the Lightmap layer holds slot 1) — three r169 reads it via
+  `texture.channel` automatically. Check overlap before ANY wall bake: rasterise island
+  centroids and count cells claimed twice.
+- The mural's painted layer comes from `M_Sign_DrippingPickle_60`'s `BAKED_EXPORT` texture
+  (`assets/warehouse/sign_dripping_pickle_baked.png`) — the sign quad itself is hidden, kept
+  only as the bake source. Its original composite graph is parked in the material; to change
+  the artwork: relink the composite, re-bake the sign (n021 recipe in feedback notes), then
+  re-run the mural layer bakes (`Mural_BASE/COL/ALP`, packed in the blend).
+
+## The warehouse loop — lighting, props, camera (state as of 2026-08-18)
+
+`loops/warehouse/` is **the production build and the hero card**; `factory-rt` and
+`factory-60` are demoted to reference. Live at
+`https://johnmcclurgdesign-alt.github.io/dripping-pickle/loops/warehouse/`.
+
+**Lighting is the factory-rt stack, re-wired and re-fitted**, not a copy: GI volume
+(700 probes at 1.6 m, 2 bounces, shipped as `assets/warehouse/gi_volume.bin` so a
+visitor never bakes), PCSS sun, rect skylights measured off the glb's own panes
+(10 apertures, 4 roof), GTAO with the floor split, raymarched shafts at a whisper.
+Every trap from the `Real-time lighting` section below still applies — bias in
+metres, `planeOf()` not bounding boxes, glass/decals non-casting, `?gibake=1` to
+force a fresh bake. Grade fitted to the reference render: exposure 1.35, sun 2.1
+at size 0.075, skylights 0.8, AO 1.35 / floor 1.45.
+
+- **★ RE-BAKE THE GI WHENEVER THE PROP SET CHANGES.** 69 props are 69 new occluders;
+  the volume baked against an empty room lights a full one wrongly. `?gibake=1`,
+  then `window.__rt.saveGI()` and drop the file over `gi_volume.bin`.
+
+**Props ship as their own `assets/warehouse/props.glb`** so set dressing never forces
+a building re-export. They load BEFORE the bake so they occlude and receive bounce.
+
+- **★ BUDGET PROP GEOMETRY BY SCREEN SIZE, NOT BY A FLAT RATIO.** The set arrived at
+  **2.9M triangles — 7.5x the whole building** — with a 0.11 m paint can at 50,000
+  and a flat rug at 631,556. Budget scales with the object's diagonal
+  (`min(45000, max(600, diagonal * 14000))`), which keeps the sofa and starves the
+  can. 2.9M -> 661k, 18% of source, no visible loss. Decimate modifiers are added,
+  exported through and removed in a `finally`, so **the blend keeps its full-res
+  meshes** — never decimate the source.
+- **★ RESOLUTION BEATS QUALITY ON A PROP SET.** 221 images, nearly all 2K, on objects
+  centimetres wide. `glb-webp.mjs --max 768` downscales inside the same ffmpeg pass
+  as the encode: 538 MB -> 33.8 MB. Reach for `--max` before touching `--quality`.
+- **★ A UDIM TEXTURE CANNOT BE EXPORTED AT ALL, AND IT KILLS THE WHOLE RUN.** The
+  vintage chair's diffuse was `TILED`; the exporter tried to read the tile off disk,
+  found nothing, and aborted the export of all 69 props at the last object. Both its
+  images had exactly ONE tile (1001) — the UDIM label was vestigial on a plain 2048
+  texture, so `pixels.foreach_get` -> `images.new` -> relink converts it losslessly.
+  **Assert the buffer is non-empty before shipping** or you get a black prop. A real
+  multi-tile UDIM would need a proper merge instead.
+
+**The panel is CONSUMER-FACING since 2026-08-18** — five icon groups (Style / Light /
+Atmosphere / Camera / Finish), art dials only. Everything that left it was rig
+calibration: sun azimuth/elevation/size, skylight shadow, the AO radii, GI bias,
+GI in-room, sky IBL, fringe, distortion, tone mapping. **Every removed dial still
+answers to its URL param at boot** — calibration is a link away, reviewers just
+don't get dials that break the rig. Combined dials are MULTIPLIERS about the
+fitted values, not absolutes: `shade` scales both AO amounts together, `flarex`
+scales the active Lens preset's flare/streak pair (so Doc 16mm stays streak-free
+at any dial value). The old `flare`/`streak`/`aoamt`-style absolute keys still
+work at boot but no longer round-trip through Copy settings.
+
+**★ N8AOPass REPLACES RenderPass — IT DRAWS THE SCENE ITSELF, UN-ANTIALIASED.**
+Slotted mid-chain after the shafts it silently overwrites everything before it: the
+MSAA'd render (reported as "I don't see any AA" — msaa 8 vs 0 was pixel-identical)
+AND the composited light shafts, which vanished without anyone noticing at whisper
+density. And left to render its own beauty, NO amount of end-of-chain SMAA recovers
+the edges ("AA much worse than before the n8ao pass").
+**The fix is the README's own escape hatch ("Using your own render target"):**
+`configuration.autoRenderBeauty = false`, replace `aoPass.beautyRenderTarget` with a
+`WebGLRenderTarget` built with `samples: 8` + a `DepthTexture` (three resolves both
+on read), and render the scene into it in the frame loop just before the composer —
+inside the drift wrapper, so the AO sees the drifted eye. Hardware MSAA and n8ao
+coexist that way; 9.1 ms total. Chain order stays: n8ao FIRST in extraPasses,
+RenderPass DISABLED while AO is on, volumetrics after, SMAA at the very end via
+`createLooks({ finalPasses })` on the tone-mapped image. Composer msaa defaults to 0
+when the AO is on (the beauty target carries the samples) and 8 when `?ao=0`.
+Resize must `beautyRT.setSize` with the pixel ratio or the AO goes soft/stale.
+
+**★ WAREHOUSE AO IS n8ao (2026-08-19), NOT GTAO.** Three GTAO fits all failed the same
+way — broad radii are soup, tight radii ink halos on the wall behind silhouettes, and
+the falloff terminates visibly ("it stops then gets light again"). n8ao (pinned
+`n8ao@1.9.4` in the importmap) feathers to nothing. Two integration traps: its dist
+build imports `{ Pass } from "postprocessing"` for a flavour we don't use — the
+importmap maps that name to `tools/stub-postprocessing.js` rather than shipping a
+second post library — and **`gammaCorrection` must be set FALSE** (default true
+converts to sRGB mid-chain; with OutputPass doing ACES at the end the whole frame
+washes out white). `shade` (walls) and `shadef` (up-facing) split its
+intensity — a pcss.js-style exact-string patch on the composite shader (throws on a
+version move) that mixes two exponents by world up-ness. Beware: n8ao's `getWorldPos`
+only inverts the PROJECTION — its "world" positions and normals are view-space
+despite the name; the up test needs the `viewMatrixInv` rotate (already a uniform).
+`aorad`/`aofall` are its radius and falloff. `tools/ao-floor.js` and the
+aoamt/aothick/aofrad/aofamt params are retired
+here; the factory loops still run the old GTAO + floor-split stack. Real grounding
+under props is the skyShadow light (skyshadow 0.9), not the AO.
+
+**Camera drift — `tools/driftcam.js`.** Slow Lissajous sway (~12 cm at amount 1;
+**default 0 — opt-in via the dial**: even ~7 px of tamed sway was reported as
+"the camera offsets after load" on the locked shot, twice. `?drift=0.15` is a
+good breath when it is wanted. **Rotation is a whisper (0.002 rad) on purpose** —
+the first cut swayed the aim by 0.5° and on a locked shot that parks the
+composition off-centre for ~10 s, which reads as "the camera is pointed down and
+left now", not as a breath; translation + parallax carry the life instead.
+**Applied just before render and RESTORED
+right after**, so OrbitControls and the flycam never see it — both re-derive
+their state from `camera.position` each frame, and letting the offset leak into
+that loop turns a closed sway into a slow walk away from the framing. The
+shafts' depth prepass sits INSIDE the apply/restore pair so the volumetrics
+march from the same drifted eye as the frame. Verify it with a pixel diff, not
+eyes — and kill the lens flare first: the TV static flickers the flare ghosts
+across the whole frame, which buries the drift signal in noise (measured diff
+46 no-drift vs 20 with-drift until the flare was zeroed; clean numbers are
+14.9 at amount 2.5 against 0.54 at zero).
+
+**★ `new OrbitControls()` LOOKS AT THE ORIGIN IN ITS CONSTRUCTOR, AND THAT EATS THE
+BLENDER FRAMING.** The constructor calls `update()`, which `lookAt()`s the default
+target `(0,0,0)` — from the warehouse camera that is a 14° downward snap. Reading
+`getWorldDirection` AFTER constructing the controls captures the yanked aim, so
+planting `target = pos + fwd·d` freezes the tilt in while *looking* like it
+preserves the framing — factory-rt and factory-60 carried a comment saying exactly
+that, above code with the read on the wrong side of the constructor. All three
+loops shipped tilted from birth; nobody caught it until the art director put the
+web build next to the Blender render (level camera, `[0,-0.7071,0,0.7071]` in the
+glb — file and loader were always innocent). **Read fwd/eye BEFORE `new
+OrbitControls`, then plant the target.** Symptom to recognise: framing is correct
+for the first beat of loading, then shifts when the controls come alive. Diagnose
+with a `lookAt` trap (patch `Object3D.prototype.lookAt`, log stacks for cameras) —
+the first entry names the caller and the target in one shot.
+
+**Camera formats — `tools/lens.js`** (shared module, wired here first). Focal length
+in real millimetres is the dial (`2*atan(18/f)`, 36 mm frame); six presets bundle
+focal + character: Native, **Wide 24 (default)**, Ultra 16, Anamorphic 2.39, Doc
+16mm, Portrait 85. The Blender camera's ~19 mm equivalent read too tight for the
+room. Distortion, fringe, vignette, grain and the letterbox are ONE pass; flare is a
+second pass before it. Panel dials: Focal, Vignette, Grain, Fringe, Distortion, DoF
+aperture, Flare, Streak. `window.__lens` for scripted checks.
+
+- **★ THE LETTERBOX IS DRAWN IN THE SHADER, NOT AS DOM BARS**, so the framing a
+  reviewer saw is the framing in their feedback screenshot.
+- **★ GRAIN MUST BE MULTIPLICATIVE — THE PASS RUNS ON LINEAR HDR BEFORE ACES.** A
+  shadow pixel is ~0.01 there, so adding ±0.035 is a 3x swing that tone mapping lifts
+  into a wall of static over the entire frame (measured: the room vanished). Scaling
+  by signal is both correct and how film behaves. Same warning for anything else
+  added to colour in a pre-OutputPass shader.
+- **★ THE FLARE IS SUN-GATED (2026-08-19): `lens.setSunGate(0..1)`, driven per frame by
+  the scene from `dot(cameraForward, toSun)`.** A brightness threshold cannot separate
+  "the sun" from "a bright TV" — the green screens are ~5× brighter than the glazing —
+  so once the TVs went emissive, their ghosts read as speckly artifacts everywhere.
+  Direction is the only signal that makes flare read as optics: it fades in over ~17°
+  as the view tilts toward the skylights and is fully off at the level default view.
+  Defaults to 1 (always on) for loops that never call it.
+- **★ FLARE THRESHOLDS MUST BE MEASURED AGAINST THE SCENE, NEVER GUESSED.** The first
+  value (1.5 linear) sat above everything in this moody room, so the pass ran and did
+  **nothing** — which reads as broken plumbing, not a wrong number. Prove the
+  machinery with absurd settings first, then measure: the glazing reads ~0.3–0.5
+  linear here, threshold **0.18**. Re-check it if the grade moves.
+- DoF is `BokehPass`, disabled until the aperture dial leaves 0, focus riding
+  `controls.target`. Like `GTAOPass`, **it captured the placeholder camera at
+  construction** and has to be handed the glTF camera on load.
+
+**Page weight: ~59 MB since 2026-08-18** (45.4 building + 13.6 props, was ~92).
+Both glbs ship Draco-compressed: `npx @gltf-transform/cli draco in.glb out.glb`
+(defaults; 14-bit positions ≈ 2 mm over this room), and the warehouse loop feeds
+`GLTFLoader` a `DRACOLoader` whose decoder path is the same pinned
+`three@0.169.0` CDN as the importmap. **Re-run the compress after every
+re-export** — an uncompressed glb still loads fine, so nothing warns when the
+weight silently doubles. The factory loops still use a bare `GLTFLoader`; only
+warehouse assets are compressed. What's left is textures (~40 MB of the
+building), already WebP'd — no big lever remains.
 
 ## Feedback panel
 
@@ -685,9 +971,17 @@ not to move would otherwise re-pick whatever is under the cursor.
 
 ## Stylised looks
 
-`tools/looks.js` — a post chain with a panel, bottom-left, in three sections: **Style**
-(Look, Strength, Blend), **Image** (Tone, Exposure) and **Atmosphere** (Volumetrics and the
-scene's dials). Collapses from its header so it gets out of the way of the thing it adjusts.
+`tools/looks.js` — a post chain with a panel, bottom-left. The panel renders **groups**:
+a scene may pass `groups: [{id, label, icon}]` (icon = a key into the exported `ICONS`
+or a raw `<svg>` string) and tag each dial/choice with `group:`; built-ins land via
+`exposure: {group, label}` and `tone: false` (which keeps the `?tone=` URL key working
+through a hidden control). A scene that passes no groups gets the classic **Style /
+Image / Atmosphere** — the factory and cat loops are untouched. Group headers collapse
+individually; the whole panel still collapses from its header. Two rules learned wiring
+it: in grouped mode choices render (and REGISTER) before dials, so a settings URL
+replays the Lens preset before the fine dials and the dials win — and `volTied` is
+opt-in per dial in grouped mode (legacy tied every dial to the volumetrics switch,
+which would have greyed out the Sun dial under `?vol=0`).
 
 **Copy settings gives you a URL, not a JSON blob** — deliberately, because the scene already
 reads `shaft`, `dustg`, `dusts` and `exp` off the query string at boot. A pasted link

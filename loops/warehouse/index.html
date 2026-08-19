@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The Dripping Pickle — Warehouse</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 14px; bottom: 12px;
+      font: 11px/1.6 ui-monospace, Consolas, monospace;
+      color: #7f8796; user-select: none; white-space: pre;
+    }
+    /* The GI bake takes seconds; a blank dark room with no explanation reads as broken. */
+    #bake {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      font: 12px/1.8 ui-monospace, Consolas, monospace; color: #cbd3e1;
+      background: rgba(12,14,18,0.86); border: 1px solid #2a2f3a; border-radius: 6px;
+      padding: 14px 18px; text-align: center; min-width: 240px; display: none;
+    }
+    #bakebar { height: 3px; background: #2a2f3a; margin-top: 8px; border-radius: 2px; overflow: hidden; }
+    #bakebar > i { display: block; height: 100%; width: 0; background: #6ea8fe; }
+    #back {
+      position: fixed; left: 14px; top: 14px; z-index: 60;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 12px 7px 10px; border-radius: 7px;
+      background: rgba(12, 15, 22, .72); border: 1px solid #232a38;
+      color: #b9c0d0; text-decoration: none; backdrop-filter: blur(6px);
+      font: 12px/1 -apple-system, "Segoe UI", sans-serif; letter-spacing: .02em;
+    }
+    #back:hover { color: #fff; border-color: #c9a227; }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "three/examples/jsm/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "n8ao": "https://cdn.jsdelivr.net/npm/n8ao@1.9.4/dist/N8AO.js",
+      "postprocessing": "../../tools/stub-postprocessing.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <a id="back" href="../../">&#8592; loops</a>
+  <div id="hud">loading&hellip;</div>
+  <div id="bake"><span id="baketxt">baking light&hellip;</span><div id="bakebar"><i></i></div></div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader }  from 'three/addons/loaders/DRACOLoader.js';
+    import { OrbitControls} from 'three/addons/controls/OrbitControls.js';
+    import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+    import { N8AOPass } from 'n8ao';
+    import { createLooks } from '../../tools/looks.js';
+    import { createFlyCam } from '../../tools/flycam.js';
+    import { createGIVolume } from '../../tools/gi-volume.js';
+    import * as PCSS from '../../tools/pcss.js';
+    import { VolumetricLightPass } from '../../tools/volumetrics.js';
+    import { createLens } from '../../tools/lens.js';
+    import { createDriftCam } from '../../tools/driftcam.js';
+    import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+    import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+    import { restoreView } from '../../tools/feedback.js';
+
+    const q = new URLSearchParams(location.search);
+
+    // ── grade ───────────────────────────────────────────────────────────────
+    // The target is reference/warehouse_lighting_reference (in chat, 2026-08-18):
+    // soft bounce-dominated daylight, ONE bright pool under the skylight, deep
+    // contact shadow in corners and roof structure, warm brick against cool
+    // shadow, no hard god-rays. Starting values lean that way; the dials finish it.
+    // Re-graded 2026-08-19 against the Blender render, on the art director's
+    // brief: "push to get our shadows to come to life — the image is very
+    // underexposed". The lift is mostly BOUNCE and FILL (gi/skyl/envi), not
+    // exposure — three's ACES has no shadow lift, so raising exp alone blows
+    // the sun pool before the desk detail arrives. skyl/envi feed the BAKE:
+    // re-bake after touching them or the shipped bounce contradicts the rig.
+    const EXPOSURE   = parseFloat(q.get('exp')    ?? '2.2');
+    const RT_SUN_AZ  = parseFloat(q.get('sunaz')  ?? '143');
+    const RT_SUN_EL  = parseFloat(q.get('sunel')  ?? '56');
+    const RT_SUN     = parseFloat(q.get('sun')    ?? '2.1');
+    // Apparent size of the source, as a tangent. The real sun is 0.0046; this room is lit
+    // through glazing the size of a bus, and the reference wants SOFT edges on the pool.
+    const RT_SUNANG  = parseFloat(q.get('sunang') ?? '0.075');
+    // Grounding is the SKYLIGHT SHADOW, not the AO (2026-08-19, second try).
+    // Screen-space AO can only smudge the surface BEHIND an object — at any
+    // radius it detaches and floats. The skyShadow light casts real geometry-
+    // anchored soft shadows under every prop, so part of the top light moved
+    // from the unshadowed skylights (2.0 -> 1.4) into it (0 -> 0.9), and the
+    // AO dropped to a tight supporting role (radii 0.5/0.6, shade 1.1).
+    const RT_SKYL    = parseFloat(q.get('skyl')   ?? '1.4');
+    const RT_SKYSHADOW = parseFloat(q.get('skyshadow') ?? '0.9');
+    const RT_GI      = parseFloat(q.get('gi')     ?? '3.0');
+    const RT_GIBIAS  = parseFloat(q.get('gibias') ?? '0.33');
+    const RT_GIVIS   = parseFloat(q.get('givis')  ?? '0');
+    const RT_GIVALID = parseFloat(q.get('givalid')?? '0.2');
+    const RT_ENVI    = parseFloat(q.get('envi')   ?? '0.18');
+    const RT_BOUNCE  = parseFloat(q.get('bounce') ?? '0');
+    const RT_AO      = q.get('ao') !== '0';
+    // The GTAO param family (aoamt/aothick/aofrad/aofamt) retired with GTAO
+    // itself — n8ao reads aorad/aofall directly at its construction below.
+    // ── the TV wall ─────────────────────────────────────────────────────────
+    // The screens share one emissive atlas (`Screen_Glow`). The pack's baked
+    // multicolour noise read as placeholder, so the atlas is REPLACED at load
+    // with live procedural antenna static — one canvas redrawn at ~24 fps:
+    // upscaled white noise (soft, not pixel-crisp), a vertical-hold band
+    // rolling down, occasional horizontal tearing, scanlines, tube flicker.
+    // Every TV maps its own UV window onto the one canvas, so each screen
+    // shows DIFFERENT static for free, and one texture upload serves them all.
+    // Green comes from the emissive tint (because pickles), and the screens
+    // are overdriven DURING THE GI BAKE so the coarse probe grid actually
+    // catches the small emitters. Look target: the Blender reference render.
+    const TV_GREEN = new THREE.Color(0.25, 1.0, 0.22);
+    // "Soft glow, nothing distracting" (art direction 2026-08-19) — 2.5 on
+    // screen, 8 for the bake. 5/14 was the first pass and read as neon.
+    const TV_GLOW  = parseFloat(q.get('tvglow') ?? '2.5'); // on screen
+    const TV_GLOW_BAKE = 8;                                // during the bake only
+    const TV_FPS = 24;           // static redraw rate — CRT cadence, not 60
+    const screenMats = new Set();
+    let tvStaticTex = null, tvTick = null;
+
+    function makeTVStatic(orig) {
+      const W = orig.image.width, H = orig.image.height;
+      const cnv = document.createElement('canvas');
+      cnv.width = W; cnv.height = H;
+      const ctx = cnv.getContext('2d');
+      // Noise at EIGHTH res, upscaled with smoothing — that is the blur, with
+      // no per-frame filter cost. It was quarter res, but ~2px features at
+      // atlas scale MINIFY on screen and shimmer as they repaint — reported as
+      // "marching ants", and they survived turning every lens effect off
+      // because the ants were in the content, not the resample. Same reason
+      // the scanlines dropped from 0.35 to 0.2 alpha: a 1px line at high
+      // contrast is the worst aliaser in the building.
+      const small = document.createElement('canvas');
+      small.width = W >> 3; small.height = H >> 3;
+      const sctx = small.getContext('2d');
+      const grain = sctx.createImageData(small.width, small.height);
+      const sl = document.createElement('canvas');
+      sl.width = 1; sl.height = 3;
+      const slc = sl.getContext('2d');
+      slc.fillStyle = 'rgba(0,0,0,0.2)';
+      slc.fillRect(0, 2, 1, 1);
+      const scan = ctx.createPattern(sl, 'repeat');
+
+      // clone() keeps flipY/colorSpace/wrap/channel from the glb's texture.
+      // Mip filtering is explicit: minified animated noise with a bare linear
+      // filter crawls; trilinear + anisotropy settles it (mips regenerate on
+      // every needsUpdate, which is the price of animated screens).
+      const tex = orig.clone();
+      tex.image = cnv;
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.anisotropy = 8;
+      tex.needsUpdate = true;
+
+      // Phosphor persistence: fresh noise blends 50/50 over the previous frame
+      // in its own accumulator, so the frame-to-frame delta halves — that
+      // delta is what read as marching ants on every screen (a real CRT
+      // ghosts; only a broken shader strobes). The accumulator is separate
+      // from the output canvas because the scanlines/band redraw every tick —
+      // persisted IN PLACE they compound toward black.
+      const accum = document.createElement('canvas');
+      accum.width = W; accum.height = H;
+      const actx = accum.getContext('2d');
+      let last = -1;
+      tvTick = (t) => {
+        if (t - last < 1 / TV_FPS) return;
+        last = t;
+        const d = grain.data;
+        for (let i = 0; i < d.length; i += 4) {
+          // clamped range: full-contrast noise strobes; 80–215 reads as static
+          const v = (80 + Math.random() * 135) | 0;
+          d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+        }
+        sctx.putImageData(grain, 0, 0);
+        actx.imageSmoothingEnabled = true;
+        actx.globalAlpha = 0.5;
+        actx.drawImage(small, 0, 0, W, H);
+        actx.globalAlpha = 1;
+        ctx.imageSmoothingEnabled = true;
+        ctx.globalAlpha = 0.92 + Math.random() * 0.08;   // tube flicker (gentler)
+        ctx.drawImage(accum, 0, 0);
+        ctx.globalAlpha = 1;
+        // vertical-hold roll — a dark band sweeping down, drawn twice so the
+        // wrap at the top never pops
+        const bh = H * 0.16;
+        const y = ((t * 0.09) % 1) * (H + bh) - bh;
+        for (const yy of [y, y - H - bh]) {
+          const g = ctx.createLinearGradient(0, yy, 0, yy + bh);
+          g.addColorStop(0, 'rgba(0,0,0,0)');
+          g.addColorStop(0.65, 'rgba(0,0,0,0.5)');
+          g.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(0, yy, W, bh);
+        }
+        // occasional horizontal tearing — bad reception, not damage, so brief
+        if (Math.random() < 0.15) {
+          const ty = Math.random() * H, th = 3 + Math.random() * 14;
+          const dx = (Math.random() - 0.5) * W * 0.06;
+          ctx.drawImage(cnv, 0, ty, W, th, dx, ty, W, th);
+        }
+        ctx.fillStyle = scan;
+        ctx.fillRect(0, 0, W, H);
+        tex.needsUpdate = true;
+      };
+      tvTick(0);
+      return tex;
+    }
+
+    // Consumer dials layered over the calibrated pairs: `shade` scales BOTH AO
+    // amounts about their fitted values, `flarex` scales the format's flare/streak
+    // pair, `drift` is the slow camera sway. All three are panel dials + URL keys.
+    const RT_SHADE  = parseFloat(q.get('shade')  ?? '1');   // walls & props
+    const RT_SHADEF = parseFloat(q.get('shadef') ?? '1');   // up-facing (floor, table tops)
+    const RT_FLAREX = parseFloat(q.get('flarex') ?? '1');
+    // Drift defaults OFF: even the tamed sway read as "the camera offsets after
+    // load" to the art director on a locked shot. It is an opt-in dial now.
+    const RT_DRIFT  = parseFloat(q.get('drift')  ?? '0');
+    const GI_SPACING = parseFloat(q.get('gistep') ?? '1.6');
+    const GI_BOUNCES = parseInt(q.get('gibounce') ?? '2', 10);
+    const GI_CUBE    = parseInt(q.get('gicube') ?? '16', 10);
+    const GI_FORCE   = q.get('gibake') === '1';
+
+    // ── renderer ────────────────────────────────────────────────────────────
+    const renderer = new THREE.WebGLRenderer(); // AA is the composer's MSAA target
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // applied by looks' OutputPass
+    renderer.toneMappingExposure = EXPOSURE;
+    renderer.shadowMap.enabled = true;
+    // PCSS reads packed DEPTH out of the map — PCF, never VSM (moments read as garbage).
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    document.body.appendChild(renderer.domElement);
+    const MAX_ANISOTROPY = renderer.capabilities.getMaxAnisotropy();
+
+    // Depth prepass target for the raymarched shafts — the march stops at real geometry.
+    const dpr0 = renderer.getPixelRatio();
+    const depthRT = new THREE.WebGLRenderTarget(innerWidth * dpr0, innerHeight * dpr0);
+    depthRT.depthTexture = new THREE.DepthTexture(innerWidth * dpr0, innerHeight * dpr0);
+    depthRT.depthTexture.type = THREE.UnsignedIntType;
+    depthRT.texture.minFilter = THREE.NearestFilter;
+    depthRT.texture.magFilter = THREE.NearestFilter;
+
+    // ── sky ─────────────────────────────────────────────────────────────────
+    // Not decoration: the GI probes render the scene from inside the room, so this dome
+    // is the source of all the daylight the bounce carries. Cooler and dimmer than the
+    // factory's — the reference reads overcast-soft, not blue-sky-hard.
+    const SKY_ZENITH  = 0x5d99d6;
+    const SKY_HORIZON = 0xd6e6f5;
+    const SKY_GROUND  = 0x6b6459;
+    const SKY_GAIN    = parseFloat(q.get('sky') ?? '0.55');
+
+    const scene = new THREE.Scene();
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: {
+        uZenith:  { value: new THREE.Color(SKY_ZENITH) },
+        uHorizon: { value: new THREE.Color(SKY_HORIZON) },
+        uGround:  { value: new THREE.Color(SKY_GROUND) },
+        uGain:    { value: SKY_GAIN },
+      },
+      vertexShader: `
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 uZenith, uHorizon, uGround;
+        uniform float uGain;
+        varying vec3 vDir;
+        void main() {
+          float h = vDir.y;
+          vec3 up   = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.45));
+          vec3 down = mix(uHorizon, uGround, pow(clamp(-h, 0.0, 1.0), 0.5));
+          gl_FragColor = vec4((h > 0.0 ? up : down) * uGain, 1.0);
+        }`,
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 24), skyMat);
+    sky.renderOrder = -1;
+    sky.frustumCulled = false;
+    scene.add(sky);
+
+    // ── the rig ─────────────────────────────────────────────────────────────
+    RectAreaLightUniformsLib.init();
+    const rig = new THREE.Group();
+    rig.name = 'RealtimeRig';
+    scene.add(rig);
+
+    const sun = new THREE.DirectionalLight(0xfff3e0, RT_SUN);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(4096, 4096);
+    // ★ bias lives in METRES and is converted where the depth range is known (aimSun) —
+    // shadow.bias is normalised depth, so refitting the box silently rescales a raw number.
+    const SHADOW_BIAS_M = parseFloat(q.get('shadowbias') ?? '0.0012');
+    sun.shadow.normalBias = parseFloat(q.get('shadownormal') ?? '0.004');
+    rig.add(sun, sun.target);
+
+    // Rect lights fill the real roof apertures (measured from the glb, never typed).
+    const MAX_SKYLIGHTS = 6;
+    const skylights = [];
+    for (let i = 0; i < MAX_SKYLIGHTS; i++) {
+      const l = new THREE.RectAreaLight(0xcfe0f2, 0, 1, 1);
+      l.visible = false;
+      rig.add(l);
+      skylights.push(l);
+    }
+
+    // Soft downward contact shadow the rect lights cannot cast. Off by default here —
+    // the reference's shadowing is carried by GI + AO.
+    const skyShadow = new THREE.DirectionalLight(0xcfe0f2, RT_SKYSHADOW);
+    skyShadow.castShadow = RT_SKYSHADOW > 0;
+    skyShadow.shadow.mapSize.set(2048, 2048);
+    rig.add(skyShadow, skyShadow.target);
+
+    // The uniform-ambient stand-in the GI volume replaces. The honest A/B, off by default.
+    const bounce = new THREE.HemisphereLight(SKY_HORIZON, 0x6b5844, RT_BOUNCE);
+    rig.add(bounce);
+
+    // IBL from the scene's own sky — for specular (the rusted beams, the glass), not fill.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const skyOnly = new THREE.Scene();
+    skyOnly.add(new THREE.Mesh(sky.geometry, sky.material));
+    // ★ fromScene defaults to far=100 and the dome radius is 400 — size the far plane
+    // to the dome or the environment map renders empty and the dial multiplies zero.
+    const envRT = pmrem.fromScene(skyOnly, 0.04, 0.1, 800);
+    scene.environment = envRT.texture;
+    scene.environmentIntensity = RT_ENVI;
+
+    let gi = null;
+
+    function setRigEnabled(on) {
+      rig.visible = on;
+      scene.environmentIntensity = on ? RT_ENVI : 0;
+      if (gi) gi.setIntensity(on ? RT_GI : 0);
+    }
+
+    let camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 500);
+
+    // AO — n8ao since 2026-08-19 (art director's find). Three attempts at GTAO
+    // all failed the same way: broad radii read as soup, tight radii inked
+    // halos onto the wall behind every silhouette, and the ring where the
+    // effect ends was always visible ("it stops then gets light again").
+    // n8ao's accurate falloff feathers to nothing, so the whole GTAO apparatus
+    // went with it: the floor split (ao-floor.js — factory loops still use
+    // it), the radius/thickness pairing, and the aofrad/aothick/aoamt params.
+    // `shade` now scales n8ao's intensity about AO_INTENSITY; `aorad` is the
+    // n8ao radius in metres. gammaCorrection stays FALSE — the pass sits
+    // mid-chain on linear HDR and OutputPass owns the transfer function;
+    // n8ao's default true washes the whole frame out.
+    const AO_INTENSITY = 3.0;
+    let aoPass = null;
+    let beautyRT = null;   // the MSAA scene target n8ao composites from
+    if (RT_AO) {
+      try {
+        aoPass = new N8AOPass(scene, camera, innerWidth, innerHeight);
+        aoPass.configuration.aoRadius = parseFloat(q.get('aorad') ?? '1.2');
+        aoPass.configuration.distanceFalloff = parseFloat(q.get('aofall') ?? '1.2');
+        aoPass.configuration.intensity = AO_INTENSITY * RT_SHADE;
+        // Full-res: halfRes shows its upsample blocks as JAGGIES wherever a
+        // bright edge meets a dark one — the TV screens against their bezels
+        // were staircased ("the anti-aliasing disappeared"). MSAA was on the
+        // whole time; the aliasing was the AO's, not the rasteriser's.
+        aoPass.configuration.halfRes = false;
+        aoPass.configuration.gammaCorrection = false;
+
+        // ★ THE MARRIAGE: hardware MSAA + n8ao, via the README's own escape
+        // hatch ("Using your own render target"). Left to itself the pass
+        // renders the scene un-antialiased and no amount of SMAA at the end
+        // recovers it ("AA much worse than before the N8AO pass"). Instead:
+        // autoRenderBeauty off, and WE render the scene into its
+        // beautyRenderTarget — built with 8x samples and a depth texture
+        // (three resolves both on read). The frame loop does the render just
+        // before the composer runs, inside the drift wrapper so the AO sees
+        // the same drifted eye as everything else.
+        {
+          const pr2 = Math.min(devicePixelRatio, 2);
+          const bw = Math.floor(innerWidth * pr2), bh = Math.floor(innerHeight * pr2);
+          const bt = new THREE.WebGLRenderTarget(bw, bh, { samples: 8, type: THREE.HalfFloatType });
+          bt.depthTexture = new THREE.DepthTexture(bw, bh, THREE.UnsignedIntType);
+          bt.depthTexture.format = THREE.DepthFormat;
+          aoPass.beautyRenderTarget.dispose();
+          aoPass.beautyRenderTarget = bt;
+          aoPass.configuration.autoRenderBeauty = false;
+          beautyRT = bt;
+        }
+        // Its blue-noise dither is SCREEN-fixed; under camera drift that grinds
+        // against the moving image. A wider denoise erases the structure.
+        aoPass.configuration.denoiseSamples = 16;
+        aoPass.configuration.denoiseRadius = 12;
+
+        // ── floor / wall split ──────────────────────────────────────────────
+        // n8ao has ONE intensity, so the split patches its composite shader —
+        // pinned-version territory like pcss.js: exact-string match against
+        // n8ao@1.9.4, THROW on a miss, because a split that silently misses is
+        // indistinguishable from a dial you have not found yet. The composite
+        // reconstructs a NORMAL from depth right there, but its getWorldPos
+        // only inverts the projection — the result is VIEW-space despite the
+        // name, so up-ness needs the viewMatrixInv rotate (already a uniform).
+        // intensity is an EXPONENT here (pow(ao, intensity)); the patch mixes
+        // between the wall exponent and an independent floor exponent by
+        // world up-ness, feathered over the same 0.70–0.92 band ao-floor used
+        // so a ramp never draws a line across itself.
+        const splitMat = aoPass.effectCompositerQuad._mesh.material;
+        const NEEDLE = 'float finalAo = pow(texel.r, intensity);';
+        if (!splitMat.fragmentShader.includes(NEEDLE)) {
+          throw new Error('n8ao floor split: composite shader mismatch — version moved, re-pin');
+        }
+        splitMat.fragmentShader = splitMat.fragmentShader
+          .replace('uniform float intensity;',
+                   'uniform float intensity;\n    uniform float uFloorInt;')
+          .replace(NEEDLE,
+            `vec3 splitN = computeNormal(getWorldPos(depth, vUv), vUv);
+        float splitUp = smoothstep(0.70, 0.92, (viewMatrixInv * vec4(splitN, 0.0)).y);
+        float finalAo = pow(texel.r, mix(intensity, uFloorInt, splitUp));`);
+        splitMat.uniforms.uFloorInt = { value: AO_INTENSITY * RT_SHADEF };
+        splitMat.needsUpdate = true;
+      } catch (e) { console.warn('n8ao unavailable:', e); aoPass = null; }
+    }
+
+    // Raymarched shafts. The reference has NO god-rays, so the default density is a
+    // whisper — enough that the air over the pool reads as air, not beams.
+    // ?volmode=off still works from the URL; the panel row is gone — the Light rays
+    // dial reaching zero says the same thing, and at zero the pass (and its whole
+    // depth prepass) is actually switched off rather than marching an empty volume.
+    let volMode = q.get('volmode') ?? 'ray';
+    const volPass = new VolumetricLightPass({
+      depthTexture: depthRT.depthTexture,
+      getCamera: () => camera,
+      steps: parseInt(q.get('volsteps') ?? '48', 10),
+      color: 0xfff0d8,
+    });
+    volPass.uniforms.uDensity.value = parseFloat(q.get('voldens') ?? '0.012');
+    volPass.uniforms.uG.value = parseFloat(q.get('volg') ?? '0.72');
+    let volsVisible = q.get('vol') !== '0';
+    let rayOn = volPass.uniforms.uDensity.value > 0.0004;
+    const syncVol = () => { volPass.enabled = volsVisible && volMode === 'ray' && rayOn; };
+    syncVol();
+    const volProxy = {
+      get visible() { return volsVisible; },
+      set visible(on) { volsVisible = !!on; syncVol(); },
+    };
+
+    // ── lens ────────────────────────────────────────────────────────────────
+    // Camera formats: focal length in real millimetres plus the lens character
+    // (distortion, fringe, vignette, grain, letterbox) as one shader pass.
+    // `lensHFov` overrides the Blender camera's fov; null = native. Default is
+    // the 24 mm preset — the native 19 mm-equivalent read too tight for the room.
+    let lensHFov = null;
+    const lens = createLens({
+      setHFov: (hf) => { lensHFov = hf; applyFov(); },
+    });
+    lens.setAspect(innerWidth / innerHeight);
+
+    // One "Lens flare" dial scales the FORMAT's flare/streak pair rather than setting
+    // absolute numbers — a Doc 16mm stays streak-free and an Anamorphic stays streaky,
+    // whatever the dial says. Re-applied on every format change or the preset wins.
+    let formatId = q.get('format') ?? 'wide24';
+    let flareMul = RT_FLAREX;
+    function applyFlare() {
+      const p = lens.formats.find((f) => f.id === formatId) || lens.formats[0];
+      lens.setFlare((p.flare ?? 0) * flareMul);
+      lens.setStreak((p.streak ?? 0) * flareMul);
+    }
+    // Apply the format BEFORE the panel exists: the preset writes vignette/grain/flare
+    // uniforms, so applying it after createLooks would clobber any values a shared
+    // settings URL just replayed through the dials.
+    lens.apply(formatId);
+    applyFlare();
+
+    // Slow camera sway for the endless loop. Applied pre-render, restored post-render,
+    // so OrbitControls and the flycam never see it (see tools/driftcam.js).
+    const drift = createDriftCam({ getCamera: () => camera, amount: RT_DRIFT });
+    window.__drift = drift;
+
+    // Depth of field. Off until the aperture dial moves — it costs a depth
+    // prepass of its own. Focus follows the orbit target every frame, so the
+    // thing you are looking at is the thing in focus.
+    const bokehPass = new BokehPass(scene, camera, {
+      focus: 6, aperture: 0, maxblur: 0.012,
+    });
+    bokehPass.enabled = false;
+
+    // ── measuring the building ──────────────────────────────────────────────
+    const GLASS_RE  = /glass/i;
+    // Glass and decals must not cast — panes acting as lids is what "the lighting is
+    // broken" actually looks like, and a dirt decal stops the light the glass let in.
+    const NOCAST_RE = /glass|decal/i;
+
+    // A pane's OWN plane, not its bounding box — a pitched sheet's box lies about
+    // position, size and aim all at once (this was n017 in the proof of concept).
+    function planeOf(mesh, centre) {
+      const nrm = mesh.geometry.attributes.normal;
+      const n = new THREE.Vector3(), t = new THREE.Vector3();
+      for (let i = 0; i < nrm.count; i++) n.add(t.fromBufferAttribute(nrm, i));
+      n.applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld));
+      if (n.lengthSq() < 1e-8) n.set(0, -1, 0);
+      n.normalize();
+      if (n.y > 0) n.negate();          // a roof light faces the room
+      const up = Math.abs(n.y) > 0.999 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      const u = new THREE.Vector3().crossVectors(up, n).normalize();
+      const v = new THREE.Vector3().crossVectors(n, u).normalize();
+      const pos = mesh.geometry.attributes.position, p = new THREE.Vector3();
+      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+      for (let i = 0; i < pos.count; i++) {
+        p.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld).sub(centre);
+        uMin = Math.min(uMin, p.dot(u)); uMax = Math.max(uMax, p.dot(u));
+        vMin = Math.min(vMin, p.dot(v)); vMax = Math.max(vMax, p.dot(v));
+      }
+      return { normal: n, uSize: uMax - uMin, vSize: vMax - vMin };
+    }
+
+    function measureApertures(root, box) {
+      const panes = [];
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        // Object name too — a roof light textured with a dirt decal has no glass
+        // material at all, and missing it leaves that bay unlit.
+        const isPane = mats.some((m) => GLASS_RE.test(m?.name || '')) || /WindowPanel/i.test(o.name);
+        if (!isPane) return;
+        const b = new THREE.Box3().setFromObject(o);
+        const centre = b.getCenter(new THREE.Vector3());
+        panes.push({ box: b, centre, plane: planeOf(o, centre) });
+      });
+      // Roof vs wall by HEIGHT — this roof is pitched, so "flat panes are thin in Y"
+      // finds nothing. Wall windows feed the room through the GI volume instead.
+      const yCut = box.min.y + (box.max.y - box.min.y) * 0.55;
+      const roof = panes.filter((p) => p.centre.y > yCut);
+      return { panes, roof };
+    }
+
+    let buildingBox = null;
+    let apertures = { panes: [], roof: [] };
+
+    function sunDirection(azDeg, elDeg) {
+      const az = THREE.MathUtils.degToRad(azDeg), el = THREE.MathUtils.degToRad(elDeg);
+      return new THREE.Vector3(
+        -Math.cos(el) * Math.sin(az), -Math.sin(el), -Math.cos(el) * Math.cos(az)).normalize();
+    }
+    let sunAz = RT_SUN_AZ, sunEl = RT_SUN_EL;
+
+    function aimSun() {
+      if (!buildingBox) return;
+      const dir = sunDirection(sunAz, sunEl);
+      const c = buildingBox.getCenter(new THREE.Vector3());
+      const r = buildingBox.getSize(new THREE.Vector3()).length() / 2;
+      sun.position.copy(c).addScaledVector(dir, -r * 1.5);
+      sun.target.position.copy(c);
+      const cam = sun.shadow.camera;
+      cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+      cam.near = 0.1; cam.far = r * 3;
+      sun.shadow.bias = -SHADOW_BIAS_M / (cam.far - cam.near);
+      cam.updateProjectionMatrix();
+    }
+    function setSunAngles(az, el) {
+      if (az !== null) sunAz = az;
+      if (el !== null) sunEl = el;
+      aimSun();
+    }
+    function aimSkyShadow() {
+      if (!buildingBox) return;
+      const c = buildingBox.getCenter(new THREE.Vector3());
+      const r = buildingBox.getSize(new THREE.Vector3()).length() / 2;
+      skyShadow.position.copy(c).add(new THREE.Vector3(0.6, r * 1.5, 0.4));
+      skyShadow.target.position.copy(c);
+      const cam = skyShadow.shadow.camera;
+      cam.left = -r; cam.right = r; cam.top = r; cam.bottom = -r;
+      cam.near = 0.1; cam.far = r * 3;
+      skyShadow.shadow.bias = -SHADOW_BIAS_M / (cam.far - cam.near);
+      skyShadow.shadow.normalBias = sun.shadow.normalBias;
+      cam.updateProjectionMatrix();
+    }
+
+    // ── looks panel ─────────────────────────────────────────────────────────
+    // The panel is consumer-facing since 2026-08-18: five groups, art dials only.
+    // Everything that left it was rig CALIBRATION, not art direction — sun angles and
+    // size (they invalidate the GI bake and the whole grade), skylight shadow, the AO
+    // radii, GI bias / in-room threshold, sky IBL, fringe / distortion (the Lens
+    // presets own those). Every one still answers to its URL param at boot, so a
+    // calibration session is a link away — the panel just stops offering reviewers
+    // dials that break the rig.
+    const looks = createLooks({
+      renderer, scene, getCamera: () => camera,
+      initial: q.get('look') || 'original',
+      menu: q.get('looks') !== '0',
+      // ★ n8ao FIRST — it REPLACES the render (the pass draws the scene itself;
+      // README: 'N8AOPass replaces RenderPass'). It sat mid-chain after the
+      // shafts at first, which threw away both the MSAA'd render AND the
+      // composited shafts, and read as 'I don't see any AA'. The RenderPass is
+      // disabled below when the AO owns the frame.
+      extraPasses: [...(aoPass ? [aoPass] : []), volPass, bokehPass, lens.flarePass, lens.pass],
+      // SMAA at the very end, on the tone-mapped image — n8ao's own scene
+      // render bypasses hardware MSAA entirely, so with AO on, edge smoothing
+      // has to be post (the n8ao README is explicit about exactly this).
+      finalPasses: [new SMAAPass(innerWidth, innerHeight)],
+      // MSAA only matters when the AO is OFF (then the RenderPass draws the
+      // frame and hardware AA works); with n8ao on it is pure wasted bandwidth.
+      msaa: parseInt(q.get('msaa') ?? (RT_AO ? '0' : '8'), 10),
+      volumetrics: [volProxy],
+      volumetricsOn: q.get('vol') !== '0',
+      tone: false,   // ACES is the show; ?tone= still works for A/Bs
+      exposure: { group: 'light', label: 'Brightness' },
+      groups: [
+        { id: 'style',  label: 'Style',      icon: 'style' },
+        { id: 'light',  label: 'Light',      icon: 'light' },
+        { id: 'air',    label: 'Atmosphere', icon: 'atmosphere' },
+        { id: 'camera', label: 'Camera',     icon: 'camera' },
+        { id: 'finish', label: 'Finish',     icon: 'finish' },
+      ],
+      dials: [
+        // ── Light ──
+        { id: 'sun', label: 'Sunlight', group: 'light', min: 0, max: 8, curve: 1.6, value: RT_SUN,
+          onInput: (v) => { sun.intensity = v; } },
+        // PCSS penumbra — the apparent size of the sun. Back on the panel by
+        // request (2026-08-19): softening the pool on the floor is art
+        // direction, not calibration. Same id as the old URL key.
+        { id: 'sunang', label: 'Sun softness', group: 'light', min: 0.002, max: 0.16, curve: 1.8,
+          value: RT_SUNANG, onInput: (v) => PCSS.setSunAngle(v) },
+        { id: 'skyl', label: 'Skylight', group: 'light', min: 0, max: 8, curve: 1.6, value: RT_SKYL,
+          onInput: (v) => { for (const l of skylights) if (l.visible) l.intensity = v; } },
+        { id: 'gi', label: 'Bounce light', group: 'light', min: 0, max: 4, curve: 1.4, value: RT_GI,
+          onInput: (v) => { if (gi && rig.visible) gi.setIntensity(v); } },
+        // ONE dial for the AO pair — scales the wall and floor amounts together about
+        // their fitted values. The radii are calibration and stay on URL params.
+        // The AO split: walls-and-props vs up-facing surfaces (floor, table
+        // tops — "floor" is a world normal, not a list of objects).
+        { id: 'shade', label: 'Contact walls', group: 'light', min: 0, max: 2, value: RT_SHADE,
+          onInput: (v) => {
+            if (aoPass) aoPass.configuration.intensity = AO_INTENSITY * v;
+          } },
+        { id: 'shadef', label: 'Contact floor', group: 'light', min: 0, max: 2, value: RT_SHADEF,
+          onInput: (v) => {
+            if (aoPass) aoPass.effectCompositerQuad._mesh.material.uniforms.uFloorInt.value = AO_INTENSITY * v;
+          } },
+        // ── Atmosphere ──
+        { id: 'voldens', label: 'Light rays', group: 'air', volTied: true,
+          min: 0, max: 0.4, curve: 2.2, value: volPass.uniforms.uDensity.value,
+          onInput: (v) => { volPass.uniforms.uDensity.value = v; rayOn = v > 0.0004; syncVol(); } },
+        // ── Camera ──
+        { id: 'mm', label: 'Focal length', group: 'camera', min: 12, max: 100, curve: 1.8, value: 24,
+          onInput: (v) => lens.setFocal(v) },
+        // three's BokehPass aperture works in tiny units; 0 disables the pass
+        { id: 'dof', label: 'Focus blur', group: 'camera', min: 0, max: 0.0004, curve: 2.0, value: 0,
+          onInput: (v) => {
+            bokehPass.enabled = v > 0.000004;
+            bokehPass.uniforms.aperture.value = v;
+          } },
+        { id: 'drift', label: 'Drift', group: 'camera', min: 0, max: 1, value: RT_DRIFT,
+          onInput: (v) => drift.setAmount(v) },
+        // ── Finish ──
+        { id: 'vig', label: 'Vignette', group: 'finish', min: 0, max: 0.6, value: 0.22,
+          onInput: (v) => { lens.pass.uniforms.uVignette.value = v; } },
+        { id: 'grain', label: 'Film grain', group: 'finish', min: 0, max: 0.15, curve: 1.6, value: 0.035,
+          onInput: (v) => { lens.pass.uniforms.uGrain.value = v; } },
+        { id: 'flarex', label: 'Lens flare', group: 'finish', min: 0, max: 2, value: RT_FLAREX,
+          onInput: (v) => { flareMul = v; applyFlare(); } },
+      ],
+      choices: [
+        { id: 'format', label: 'Lens', group: 'camera', value: formatId,
+          options: lens.formats.map((f) => ({ label: f.label, value: f.id })),
+          onChange: (v) => { formatId = v; lens.apply(v); applyFlare(); } },
+      ],
+    });
+    window.__lens = lens;   // scripted checks — flare thresholds cannot be eyeballed
+    window.__looks = looks;
+    // n8ao owns the frame: the RenderPass would draw the whole scene a second
+    // time only to be overwritten. Off when the AO is on.
+    if (aoPass) looks.renderPass.enabled = false;
+    camera.position.set(-10, 1.5, 4);
+
+    let controls = null, fly = null;
+    const state = { meshes: 0, tris: 0, noCast: 0, cam: 'default', gi: 'off' };
+
+    // Preserve the Blender camera's HORIZONTAL fov across canvas shapes.
+    let hFov = null;
+    function applyFov() {
+      camera.aspect = innerWidth / innerHeight;
+      const hf = lensHFov ?? hFov;   // lens preset wins; null falls back to the Blender cam
+      if (hf) {
+        camera.fov = THREE.MathUtils.radToDeg(
+          2 * Math.atan(Math.tan(hf / 2) / camera.aspect));
+      }
+      camera.updateProjectionMatrix();
+    }
+
+    // ── load ────────────────────────────────────────────────────────────────
+    const hud = document.getElementById('hud');
+    const bakeUI = document.getElementById('bake');
+    const bakeTxt = document.getElementById('baketxt');
+    const bakeBar = document.querySelector('#bakebar > i');
+    const litMaterials = new Set();
+
+    // Both glbs are Draco-compressed (gltf-transform draco, defaults: 14-bit
+    // positions ≈ 2 mm over this room). The decoder wasm comes from the same
+    // pinned CDN as three itself, so the versions cannot drift apart.
+    const draco = new DRACOLoader()
+      .setDecoderPath('https://unpkg.com/three@0.169.0/examples/jsm/libs/draco/gltf/');
+    const gltfLoader = new GLTFLoader().setDRACOLoader(draco);
+
+    gltfLoader.load('../../assets/warehouse/structure.glb', async (gltf) => {
+      let tris = 0, meshes = 0, noCast = 0;
+
+      gltf.scene.traverse((o) => {
+        if (o.isCamera) {
+          camera = o;
+          const vfov = THREE.MathUtils.degToRad(camera.fov);
+          hFov = 2 * Math.atan(Math.tan(vfov / 2) * (camera.aspect || (16 / 9)));
+          camera.near = 0.05; camera.far = 500;
+          applyFov();
+          state.cam = o.name;
+          if (aoPass) aoPass.camera = camera; // extra passes hold their own reference
+          bokehPass.camera = camera;          // same trap, same fix
+        }
+        if (!o.isMesh) return;
+        meshes++;
+        const idx = o.geometry.index;
+        tris += (idx ? idx.count : o.geometry.attributes.position.count) / 3;
+
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        const blocks = mats.some((m) => m && NOCAST_RE.test(m.name || ''));
+        o.castShadow = !blocks;
+        o.receiveShadow = true;
+        if (blocks) noCast++;
+
+        for (const m of mats) {
+          if (!m) continue;
+          // Only real glass blends; anything else flagged transparent would sort
+          // against itself and punch holes.
+          if (m.transparent) {
+            if (GLASS_RE.test(m.name || '')) {
+              m.depthWrite = false;
+              if (m.opacity === 1) m.opacity = 0.22;
+            } else {
+              m.transparent = false;
+              m.depthWrite = true;
+            }
+          }
+          if (/decal/i.test(m.name || '') && m.map) {
+            m.transparent = true;
+            m.depthWrite = false;
+          }
+          // Inside the room we face the back of every wall.
+          m.side = THREE.DoubleSide;
+          // ★ KEEP the roughness/metallic/normal maps — this export ships real ones.
+          if (m.isMeshStandardMaterial) litMaterials.add(m);
+          for (const tex of [m.map, m.normalMap, m.roughnessMap, m.metalnessMap,
+                             m.aoMap, m.emissiveMap, m.alphaMap]) {
+            if (tex) { tex.anisotropy = MAX_ANISOTROPY; tex.needsUpdate = true; }
+          }
+          m.needsUpdate = true;
+        }
+      });
+
+      scene.add(gltf.scene);
+      state.meshes = meshes; state.tris = tris; state.noCast = noCast;
+
+      // camera arrives parented; free it so controls own it cleanly
+      if (camera.parent && camera.parent !== scene) scene.attach(camera);
+
+      // ── props ─────────────────────────────────────────────────────────────
+      // Separate file so set dressing iterates without re-exporting the building.
+      // Loaded BEFORE the GI bake: they occlude bounce and sit in it like the walls do.
+      try {
+        const props = await new Promise((res, rej) =>
+          gltfLoader.load('../../assets/warehouse/props.glb', res, undefined, rej));
+        props.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          o.castShadow = true;
+          o.receiveShadow = true;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const m of mats) {
+            if (!m) continue;
+            // The TV screens — live antenna static (see the TV wall block up
+            // top). One shared texture: the first screen builds it, the rest
+            // point at it, so the whole wall costs one canvas + one upload.
+            if (m.name === 'Screen_Glow' && !screenMats.has(m)) {
+              if (m.emissiveMap && m.emissiveMap.image) {
+                if (!tvStaticTex) tvStaticTex = makeTVStatic(m.emissiveMap);
+                m.emissiveMap = tvStaticTex;
+              }
+              m.emissive.copy(TV_GREEN);
+              m.emissiveIntensity = TV_GLOW;
+              screenMats.add(m);
+            }
+            if (m.transparent && !GLASS_RE.test(m.name || '')) {
+              // carpet hair cards etc. — cut-outs, not blenders
+              m.transparent = false;
+              m.alphaTest = m.map ? 0.4 : 0;
+              m.depthWrite = true;
+            }
+            if (m.isMeshStandardMaterial) litMaterials.add(m);
+            for (const tex of [m.map, m.normalMap, m.roughnessMap, m.metalnessMap]) {
+              if (tex) { tex.anisotropy = MAX_ANISOTROPY; tex.needsUpdate = true; }
+            }
+            m.needsUpdate = true;
+          }
+          state.meshes++;
+        });
+        scene.add(props.scene);
+        state.props = true;
+      } catch (e) { console.warn('props.glb not loaded:', e); }
+
+      // ── measure, then aim ─────────────────────────────────────────────────
+      buildingBox = new THREE.Box3().setFromObject(gltf.scene);
+      apertures = measureApertures(gltf.scene, buildingBox);
+      aimSun();
+      aimSkyShadow();
+      PCSS.setSunAngle(RT_SUNANG);
+
+      apertures.roof.forEach((ap, i) => {
+        const l = skylights[i];
+        if (!l) return;
+        l.visible = true;
+        l.intensity = RT_SKYL;
+        l.width = ap.plane.uSize; l.height = ap.plane.vSize;
+        l.position.copy(ap.centre);
+        l.lookAt(ap.centre.x + ap.plane.normal.x,
+                 ap.centre.y + ap.plane.normal.y,
+                 ap.centre.z + ap.plane.normal.z);
+      });
+
+      volPass.setLight(sun);
+      volPass.uniforms.uMaxDist.value = buildingBox.getSize(new THREE.Vector3()).length();
+
+      // ── GI ────────────────────────────────────────────────────────────────
+      const giBounds = buildingBox.clone().expandByScalar(GI_SPACING * 0.5);
+      gi = createGIVolume({
+        renderer, scene, bounds: giBounds,
+        spacing: GI_SPACING, cubeSize: GI_CUBE,
+      });
+      for (const m of litMaterials) { gi.patch(m); PCSS.patch(m); }
+      gi.setIntensity(0);              // dark until the volume holds something
+      gi.setNormalBias(RT_GIBIAS);
+      gi.setBackWeight(RT_GIVIS);
+      gi.setValidThreshold(RT_GIVALID);
+
+      // The shipped opening view — captured live by the art director with the fly
+      // camera (2026-08-19), a step in and left of the Blender camera. The glb's
+      // own camera still carries the Blender framing; these two constants override
+      // it, and ?cam=&tgt= deep links override both (restoreView runs just below).
+      // ★ Set target AFTER constructing OrbitControls, then update(): the ctor
+      // lookAt()s its default target — the world origin — so any aim read before
+      // the target is planted captures a yanked camera, not the framing.
+      const HOME_POS = new THREE.Vector3(-5.343, 1.742, -0.052);
+      const HOME_TGT = new THREE.Vector3(4.628, 1.637, 0.707);
+      camera.position.copy(HOME_POS);
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.target.copy(HOME_TGT);
+      controls.update();
+      fly = createFlyCam({ camera, controls });
+      window.__fly = fly;
+      restoreView({ scene, camera, controls });
+
+      async function runBake() {
+        bakeUI.style.display = 'block';
+        // Overdrive the screens for the bake: a 0.3 m emitter is invisible to a
+        // 1.6 m probe grid at display brightness. Restored in the finally.
+        for (const m of screenMats) m.emissiveIntensity = TV_GLOW_BAKE;
+        try {
+        const r = await gi.bake({
+          bounces: GI_BOUNCES,
+          exclude: [],
+          onProgress: ({ done, total, bounce, bounces }) => {
+            bakeTxt.textContent = `baking light — bounce ${bounce}/${bounces}`;
+            bakeBar.style.width = `${(100 * (bounce - 1 + done / total) / bounces).toFixed(1)}%`;
+          },
+        });
+        bakeUI.style.display = 'none';
+        gi.setIntensity(rig.visible ? RT_GI : 0);
+        state.gi = `${gi.dims.x}x${gi.dims.y}x${gi.dims.z} (${r.probes}) ${r.ms}ms`;
+        writeHud();
+        } finally {
+          for (const m of screenMats) m.emissiveIntensity = TV_GLOW;
+        }
+      }
+      // Ship the volume next to the glb; ?gibake=1 forces a fresh one while dialling.
+      async function loadOrBake() {
+        if (!GI_FORCE) {
+          try {
+            const res = await fetch('../../assets/warehouse/gi_volume.bin');
+            if (res.ok && gi.load(await res.arrayBuffer())) {
+              gi.setIntensity(rig.visible ? RT_GI : 0);
+              state.gi = `cached ${gi.dims.x}x${gi.dims.y}x${gi.dims.z}`;
+              writeHud();
+              return;
+            }
+          } catch { /* no cache yet — bake */ }
+        }
+        await runBake();
+      }
+      await loadOrBake();
+
+      window.__rt = {
+        rig, sun, skylights, bounce, gi, apertures, buildingBox,
+        setRigEnabled, setSunAngles, runBake, volPass,
+        saveGI: () => {
+          const blob = new Blob([gi.serialise()], { type: 'application/octet-stream' });
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'gi_volume.bin';
+          a.click();
+        },
+      };
+
+      writeHud();
+
+      import('../../tools/feedback.js').then(({ initFeedback }) => {
+        initFeedback({ scene, camera, renderer, controls,
+                       pickRoot: gltf.scene, loop: 'warehouse' });
+      });
+    }, (ev) => {
+      if (ev.total) hud.textContent = `loading ${(100 * ev.loaded / ev.total).toFixed(0)}%`;
+    }, (e) => { hud.textContent = 'GLB FAILED: ' + e; });
+
+    function writeHud(extra = '') {
+      hud.textContent =
+        `meshes ${state.meshes}  tris ${Math.round(state.tris).toLocaleString()}  non-casters ${state.noCast}\n` +
+        `camera ${state.cam}  exposure ${renderer.toneMappingExposure}\n` +
+        `apertures ${apertures.panes.length} (${apertures.roof.length} roof)  gi ${state.gi}\n` +
+        (fly ? fly.hint : '') + extra;
+    }
+
+    // ── frame loop ──────────────────────────────────────────────────────────
+    const clock = new THREE.Clock();
+    const gateFwd = new THREE.Vector3(), gateSun = new THREE.Vector3();
+    let last = 0;
+    renderer.setAnimationLoop(() => {
+      const t = clock.getElapsedTime();
+      const dt = Math.min(t - last, 0.1);
+      last = t;
+      if (fly) fly.update(dt);
+      if (controls) controls.update();
+      if (tvTick) tvTick(t);
+      lens.update(t);
+      // Flare only when the camera faces the SUN — a threshold cannot tell the
+      // sun from a bright TV (the screens are far brighter than the glazing),
+      // so the gate is directional. Fades in over ~17° as the view tilts up
+      // toward the skylights; the default level view sits fully gated off.
+      camera.getWorldDirection(gateFwd);
+      gateSun.copy(sunDirection(sunAz, sunEl)).negate();
+      lens.setSunGate(THREE.MathUtils.smoothstep(gateFwd.dot(gateSun), 0.45, 0.75));
+      // focus rides the orbit target — the thing you are looking at is in focus
+      if (bokehPass.enabled && controls) {
+        bokehPass.uniforms.focus.value =
+          camera.position.distanceTo(controls.target);
+      }
+
+      // Drift wraps the RENDER only — applied after the controls have settled the
+      // real pose, undone before they next read it. The depth prepass sits inside
+      // the wrapper so the shafts march from the same drifted eye as the frame.
+      drift.apply(t);
+
+      // the MSAA beauty render n8ao composites from (see the AO block up top)
+      if (beautyRT) {
+        renderer.setRenderTarget(beautyRT);
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(null);
+      }
+
+      // depth prepass for the shafts — needs its OWN target, sampling the buffer you
+      // are drawing into is a feedback loop
+      if (volPass.enabled) {
+        const prevTarget = renderer.getRenderTarget();
+        renderer.setRenderTarget(depthRT);
+        renderer.clear();
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(prevTarget);
+      }
+
+      looks.render(t);
+      drift.restore();
+    });
+
+    addEventListener('resize', () => {
+      applyFov();
+      renderer.setSize(innerWidth, innerHeight);
+      looks.setSize(innerWidth, innerHeight);
+      if (aoPass) aoPass.setSize(innerWidth, innerHeight);
+      lens.setAspect(innerWidth / innerHeight);
+      const dpr = renderer.getPixelRatio();
+      depthRT.setSize(innerWidth * dpr, innerHeight * dpr);
+      if (beautyRT) beautyRT.setSize(innerWidth * dpr, innerHeight * dpr);
+    });
+  </script>
+</body>
+</html>

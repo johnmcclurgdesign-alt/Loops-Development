@@ -12,7 +12,7 @@
       "id": "dripping-pickle",
       "name": "The Dripping Pickle",
       "status": "live",
-      "scenes": ["factory-rt", "cat-sequencer"]
+      "scenes": ["warehouse", "factory-rt", "factory-60", "cat-sequencer"]
     },
     {
       "id": "pirate-beach",

@@ -35,7 +35,15 @@ const IN = args[0];
 const OUT = args[1] && !args[1].startsWith('--') ? args[1] : IN.replace(/\.glb$/, '.webp.glb');
 const qi = args.indexOf('--quality');
 const QUALITY = qi >= 0 ? args[qi + 1] : '85';
-if (!IN) { console.error('usage: node tools/glb-webp.mjs in.glb [out.glb] [--quality 85]'); process.exit(1); }
+// ★ RESOLUTION IS THE BIGGER LEVER THAN QUALITY ON A PROP SET. Sixty-nine props
+// arrived carrying 221 textures, nearly all 2K, on objects that are centimetres
+// wide in frame — a 0.11 m paint can does not deserve 4 megapixels. Capping the
+// long edge costs nothing visible at these screen sizes and is worth more than
+// any quality setting. Downscale happens BEFORE the webp encode, in the same
+// ffmpeg invocation, so nothing is decoded twice. Omit to leave sizes alone.
+const mi = args.indexOf('--max');
+const MAXPX = mi >= 0 ? parseInt(args[mi + 1], 10) : 0;
+if (!IN) { console.error('usage: node tools/glb-webp.mjs in.glb [out.glb] [--quality 85] [--max 1024]'); process.exit(1); }
 
 const MB = (n) => (n / 1048576).toFixed(2) + ' MB';
 const align4 = (n) => (n + 3) & ~3;
@@ -69,7 +77,12 @@ try {
     await writeFile(fin, bytes);
     // -lossless 0 with a quality target; compression_level 6 is the slow/small end.
     // libwebp keeps the alpha channel, which is the whole reason cut-outs can stop being PNG.
-    await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', fin,
+    // scale only when the long edge exceeds the cap; -1 keeps the aspect and
+    // rounds to even, which libwebp needs
+    const scale = MAXPX
+      ? ['-vf', `scale='if(gt(max(iw,ih),${MAXPX}),if(gte(iw,ih),${MAXPX},-2),iw)':'if(gt(max(iw,ih),${MAXPX}),if(gte(iw,ih),-2,${MAXPX}),ih)'`]
+      : [];
+    await run('ffmpeg', ['-y', '-loglevel', 'error', '-i', fin, ...scale,
                          '-c:v', 'libwebp', '-lossless', '0',
                          '-quality', QUALITY, '-compression_level', '6', fout]);
     const enc = await readFile(fout);

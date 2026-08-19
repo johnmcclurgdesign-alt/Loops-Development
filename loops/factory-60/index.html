@@ -1,0 +1,1408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dripping Pickle — 60% building</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 14px; bottom: 12px;
+      font: 11px/1.6 ui-monospace, Consolas, monospace;
+      color: #7f8796; user-select: none; white-space: pre;
+    }
+    /* The GI bake takes seconds and freezes nothing, but a blank dark room with no
+       explanation reads as a broken page. */
+    #bake {
+      position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      font: 12px/1.8 ui-monospace, Consolas, monospace; color: #cbd3e1;
+      background: rgba(12,14,18,0.86); border: 1px solid #2a2f3a; border-radius: 6px;
+      padding: 14px 18px; text-align: center; min-width: 240px; display: none;
+    }
+    #bakebar { height: 3px; background: #2a2f3a; margin-top: 8px; border-radius: 2px; overflow: hidden; }
+    #bakebar > i { display: block; height: 100%; width: 0; background: #6ea8fe; }
+    /* Back to the dashboard. Identical markup and #back id on every sub-page so all three
+       stay findable with one grep, even though the loops share no runtime code. Top-left is
+       the only free corner: hud bottom-left, looks bottom-left, feedback bottom-right.
+       It is DOM, so it never lands in a feedback screenshot — those capture the canvas. */
+    #back {
+      position: fixed; left: 14px; top: 14px; z-index: 60;
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 12px 7px 10px; border-radius: 7px;
+      background: rgba(12, 15, 22, .72); border: 1px solid #232a38;
+      color: #b9c0d0; text-decoration: none; backdrop-filter: blur(6px);
+      font: 12px/1 -apple-system, "Segoe UI", sans-serif; letter-spacing: .02em;
+    }
+    #back:hover { color: #fff; border-color: #c9a227; }
+  </style>
+</head>
+<body>
+  <a id="back" href="../../" title="Back to all loops">← Loops</a>
+  <div id="hud">loading…</div>
+  <div id="bake"><span id="baketxt">baking light…</span><div id="bakebar"><i></i></div></div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "yuka": "https://cdn.jsdelivr.net/npm/yuka@0.7.8/build/yuka.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
+    import { RGBELoader }   from 'three/addons/loaders/RGBELoader.js';
+    import { OrbitControls} from 'three/addons/controls/OrbitControls.js';
+    import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
+    import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+    import { createLooks } from '../../tools/looks.js';
+    import { createFlyCam } from '../../tools/flycam.js';
+    import { createGIVolume } from '../../tools/gi-volume.js';
+    import * as PCSS from '../../tools/pcss.js';
+    import { VolumetricLightPass } from '../../tools/volumetrics.js';
+    import { splitFloorAO } from '../../tools/ao-floor.js';
+    import { createCatWalk, measureAuthoredSpeed } from '../../tools/cat-walk.js';
+
+    // ── grade ───────────────────────────────────────────────────────────────
+    // Blender was ACES 1.3, exposure 2.5, gamma 1.3. three.js ACES is only an
+    // approximation of that, so EXPOSURE here is a fitted value, not a copy.
+    const q = new URLSearchParams(location.search);
+    const EXPOSURE     = parseFloat(q.get('exp')  ?? '2.8');
+    const LM_INTENSITY = parseFloat(q.get('lm')   ?? '1.0');
+    // MUST be false. The glTF exporter already flips V on export, so flipping the
+    // texture too puts the lightmap on upside down — which reads as dark bands
+    // across walls and looks convincingly like extra geometry. ?flip=1 to prove it.
+    const FLIP_Y       = (q.get('flip') ?? '0') === '1';
+    const DEBUG_UV     = q.get('debug') === 'uv1';
+    const DEBUG_LM     = q.get('debug') === 'lm';
+    const SIDE = { front: THREE.FrontSide, back: THREE.BackSide, double: THREE.DoubleSide }
+                 [q.get('side') ?? 'double'];
+
+    // The .glb is re-exported constantly during art direction but its URL never changes,
+    // so the browser keeps serving a stale copy and you debug a scene you already fixed.
+    const ASSET_V = q.get('assets') ?? String(Date.now());
+    const bust = (p) => p + '?v=' + ASSET_V;
+
+    const hud = document.getElementById('hud');
+    const bakeUI = document.getElementById('bake');
+    const bakeTxt = document.getElementById('baketxt');
+    const bakeBar = document.querySelector('#bakebar > i');
+
+    // The feedback panel is ON unless you ask for it not to be. It used to need ?dev=1, which
+    // meant a note could only be left by someone who already knew the flag — so anyone opening
+    // the plain link had no way to say anything, which is backwards for a review tool. The
+    // panel works out for itself whether it can WRITE (dev server present) or only copy to the
+    // clipboard, so the URL no longer has to say. `?fb=0` for a clean frame to capture.
+    // Note this pins preserveDrawingBuffer on for every visitor — the cost of screenshots.
+    const FEEDBACK = q.get('fb') !== '0' && q.get('dev') !== '0' && q.get('review') !== '0';
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      // needed so the feedback panel can grab the canvas for a screenshot
+      preserveDrawingBuffer: FEEDBACK,
+    });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = EXPOSURE;
+    renderer.shadowMap.enabled = true;
+    // MUST be PCF, not VSM. PCSS reads packed DEPTH out of the shadow map to work out how
+    // far away the blocker is; VSM stores depth MOMENTS instead, and reading those as a
+    // depth gives nonsense — shadows that flicker or vanish. The old rig used VSM because
+    // it needed a uniform blur; PCSS derives the blur instead, so that reason is gone.
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    PCSS.install();
+
+    // Ask the GPU rather than hardcoding, and cap it. Two separate hazards:
+    //   - getMaxAnisotropy() returns 0 when the extension is missing, so floor it at 1.
+    //   - 16 is more than this scene needs. Nearly all of the win is in the first few
+    //     steps (1 -> 4 is night and day, 8 -> 16 is invisible here), and anisotropic
+    //     filtering costs texture bandwidth exactly on the grazing surfaces that fill the
+    //     most pixels. Capping at 8 keeps the fix off the back of a weak GPU.
+    // ?aniso= to override, ?aniso=1 to see the blur this was fixing.
+    const MAX_ANISOTROPY = Math.max(1, Math.min(
+      parseInt(q.get('aniso') ?? '8', 10),
+      renderer.capabilities.getMaxAnisotropy() || 1));
+
+    // Linear multiplier on the concrete trim atlas — see the note at the material loop.
+    // ?concrete=1 to see it as the .glb ships it.
+    // ★ NO LIFT HERE, AND THAT IS THE POINT — THE SOURCE TEXTURE WAS FIXED.
+    // factory-rt multiplies this material by 12 to rescue a trim atlas that really was that
+    // dark. It is not any more: `_facade_4k/modular_factory_facade_trim_01_diff_4k.png`
+    // reads a mean of 106,90,77 sRGB on disk, and this loop's export carries it faithfully at
+    // 100,92,86. `factory.glb` still holds the OLD dark version (35,27,21) and is the stale
+    // asset, so its 12x is still correct THERE and blows this one to white.
+    // Blender is the ground truth for textures; the web only adjusts lights. So the fix is to
+    // stop compensating, not to re-tune the multiplier. When factory.glb is re-exported the
+    // same change applies to it and the 12 can go.
+    // Careful reading Blender to check this: `image.pixels` hands back LINEAR floats for an
+    // sRGB image. 0.1203 there is sRGB 97, not sRGB 31 — read it as sRGB and the numbers
+    // "confirm" the texture is still dark, which is the wrong turn I took.
+    const CONCRETE_LIFT = parseFloat(q.get('concrete') ?? '1');
+
+    // ── depth pre-pass, for soft light shafts ───────────────────────────────
+    // A light shaft is a flat quad, so wherever it passes through the floor or a wall it
+    // is sliced along a dead straight line — the silhouette that reads as one beam
+    // shadowing the next (n011). The fix is to know how far away the nearest solid surface
+    // is behind each fragment and fade the beam out as it gets close, which is what makes
+    // it behave like a volume instead of a sheet.
+    //
+    // It needs its OWN target. Sampling the depth of the buffer you are currently drawing
+    // into is a feedback loop and undefined in WebGL, so the opaque scene is rendered once
+    // more into a depth texture first. Glass and the sky already carry depthWrite:false, so
+    // they leave no depth behind and beams pass through them freely — which is what you
+    // want, since every beam is born at a pane of glass.
+    // Sized in DRAWING BUFFER pixels, not CSS pixels — it is sampled by gl_FragCoord, so a
+    // devicePixelRatio mismatch shifts the whole fade off by a factor of two.
+    const dw = renderer.domElement.width, dh = renderer.domElement.height;
+    const depthRT = new THREE.WebGLRenderTarget(dw, dh);
+    depthRT.depthTexture = new THREE.DepthTexture(dw, dh);
+    depthRT.depthTexture.type = THREE.UnsignedIntType;
+    depthRT.texture.minFilter = THREE.NearestFilter;
+    depthRT.texture.magFilter = THREE.NearestFilter;
+
+    // ── sky ─────────────────────────────────────────────────────────────────
+    // What you see through the skylights and windows — and, since the GI probes render
+    // the scene from inside the room, also the source of every bit of daylight that
+    // reaches the far bay. It is not decoration any more; it is the light.
+    const SKY_ZENITH  = 0x4f9ae4;
+    const SKY_HORIZON = 0xcbe8fb;
+    const SKY_GROUND  = 0x6b6459;
+    const SKY_GAIN    = parseFloat(q.get('sky') ?? '0.55');
+
+    // ── ★ THE 60% BUILDING ──────────────────────────────────────────────────
+    // This loop loads its OWN export — factory_60.glb, out of Blender's "Scene_60" — so
+    // the geometry is genuinely 60% in world metres. It no longer borrows factory-rt's
+    // .glb and shrinks it at runtime, which matters because the two are not equivalent:
+    // the runtime version also shrank every TILING TEXTURE with the room (brick course
+    // 76.9 mm -> 46.2 mm), and that is exactly what makes a scaled room read as a
+    // dollhouse instead of a smaller building. The export has the materials re-scaled.
+    //
+    // ★ TWO DIFFERENT NUMBERS LIVE HERE AND CONFLATING THEM IS THE BUG WAITING TO HAPPEN.
+    // BUILDING_SCALE describes the ASSET — this building is 0.6 the size of factory-rt's,
+    // and every dial expressed in metres (AO radius, shadow bias, volumetric density) has
+    // to follow it or this is a different grade rather than the same look at a smaller
+    // size. MODEL_SCALE is a RUNTIME multiplier on top, and it is 1.0 now precisely
+    // because the shrinking already happened in Blender. Setting BUILDING_SCALE from
+    // MODEL_SCALE, as this file did while it shared factory-rt's .glb, would silently
+    // un-scale every one of those dials the moment the export landed.
+    const BUILDING_SCALE = 0.6;                                   // vs factory-rt, baked into the .glb
+    const MODEL_SCALE = parseFloat(q.get('mscale') ?? '1.0');     // extra runtime scale; normally none
+    const INV_BS = 1 / BUILDING_SCALE;
+
+    // ── atmosphere ──────────────────────────────────────────────────────────
+    // All of it is the raymarched pass now. The card light shafts and the dust motes are
+    // gone: the cards were a billboard fake that spent a day generating artifacts nobody
+    // wanted (silhouettes, striping, slicing through the floor), and the dust only ever
+    // existed to give the eye something to agree with the cards about.
+    const SHAFT_COLOR = 0xf0ece6;   // near-neutral; the warmth is in the brick
+
+    // ── the lighting rig ────────────────────────────────────────────────────
+    // NOTHING here is a hardcoded coordinate any more. The previous rig carried the
+    // glazing centre, the light ray and six shaft positions as constants measured off the
+    // bake — and when the building was re-exported with a second bay they all pointed at
+    // a skylight that had moved, so the room rendered nearly black and looked broken.
+    // Everything below is measured out of the .glb at load instead.
+    const RT_MODE   = q.get('mode') ?? 'rt';    // 'rt' | 'baked' | 'both'
+    // Sun as an angle rather than a vector, so it can be dialled. These are ART DIRECTION
+    // as of 2026-08-17, dialled in the panel and copied back — they are no longer the ray
+    // measured off the original Blender bake (az 217 / el 53 / intensity 4.88), so do not
+    // "restore" them to that on the grounds that it was the measured answer. The azimuth
+    // moved 74°, which is why the shipped gi_volume.bin was re-baked with them.
+    const RT_SUN_AZ = parseFloat(q.get('sunaz') ?? '143.28');
+    const RT_SUN_EL = parseFloat(q.get('sunel') ?? '56.408');
+    const RT_SUN    = parseFloat(q.get('sun')    ?? '2.3094');
+    const RT_SKYL   = parseFloat(q.get('skyl')   ?? '0');
+    // ★ 0.195 WAS FITTED AGAINST AN ENVIRONMENT MAP THAT WAS BLACK — see the PMREM far-plane
+    // note below. The dial was multiplying zero, so ANY value looked the same and the number
+    // means nothing. With the map actually rendering, the old 0.195 adds 11.6% to the frame
+    // (loop camera mean 90.7 -> 101.2), which would silently re-grade the whole room. It
+    // went to 0.02 to hold the reviewed look while the control came back to life, and has
+    // since been dialled to 0 on purpose: the GI volume owns the fill here and the room has
+    // nothing glossy for an IBL to reflect. The dial WORKS now, so raise it if that changes
+    // — and RE-BAKE THE GI if you move it far, because the probes see whatever is lighting
+    // the room. Zero here is a decision, not the old bug.
+    const RT_ENVI   = parseFloat(q.get('envi')   ?? '0');
+    // ★ A RectAreaLight CANNOT CAST A SHADOW IN THREE — it has no `.shadow` object at all, so
+    // `castShadow` on one is inert (verified: setting it changes exactly 0 pixels). That means
+    // the room's DOMINANT source throws nothing: with only the skylights lit the floor reads
+    // 98 against 137 for everything, and none of it is occluded by anything standing in it.
+    // GTAO and the GI volume have been carrying that on their own.
+    // So: one DirectionalLight straight down, whose job is the contact shadow and not the
+    // light. The rect lights keep doing the area falloff that makes a skylight read as a hole
+    // rather than a lamp.
+    //
+    // ★ IT IS DEFAULTED OFF BECAUSE IT DOES NOT EARN ITS 1.3 ms, AND THAT IS A MEASUREMENT,
+    // NOT A HUNCH. Traded at matched brightness against the rect lights it makes the room
+    // WORSE — skyl 3.27/shadow 0 reads frame mean 89.3 with 6.14 of contact darkening under
+    // the cat; 1.6/2.4 reads 74.2 with 7.63. So a 17% dimmer, flatter room buys 1.5 units of
+    // shadow. A directional only lights what faces up, while the rect lights light the walls
+    // too, and it is the walls that give the room its shape. GTAO is already doing most of
+    // the contact work (the 6.14 above is with NO skylight shadow at all).
+    // Kept, at 0, because it is correct and cheap to switch on — the moment the room has
+    // props casting on each OTHER rather than one cat casting on the floor, re-measure it.
+    const RT_SKYSHADOW = parseFloat(q.get('skyshadow') ?? '0');
+    const RT_AO     = q.get('ao') !== '0';
+    // ★ GTAO's DEFAULT RADIUS IS 0.25 METRES, AND THAT IS WHY THE ROOM LOOKS FLAT.
+    // 25cm is a crease. This building is 20m across with 4.7m columns, so at the default
+    // the occlusion only ever darkens the width of a hand and is invisible at any normal
+    // viewing distance — the AO is running, doing almost nothing, and reads as missing.
+    // Radius is in WORLD units, so it has to be set against the size of the room. At the top
+    // of the dial now, which is only usable because thickness tracks it — see RT_AOTHICK.
+    // ★ EVERY DIAL BELOW THAT IS IN METRES HAS TO FOLLOW THE BUILDING, or the 60% loop is
+    // not the same look at a smaller size — it is a different grade. AO radius, shadow
+    // bias and normal bias are world distances, so they scale WITH the room (x0.6).
+    // Volumetric density is the exception: it is per-metre, and the ray now has less room
+    // to travel, so it scales INVERSELY (/0.6) to hold the same optical depth.
+    const RT_AORADIUS = parseFloat(q.get('aorad') ?? String(4.9956 * BUILDING_SCALE));
+    const RT_AOAMOUNT = parseFloat(q.get('aoamt') ?? '1.0');
+    // ★ GTAO's `thickness` IS HOW DEEP AN OCCLUDER IS ASSUMED TO BE, AND LEAVING IT AT ITS
+    // FIXED 1 m WHILE `radius` IS A DIAL IS WHY THE AO BREAKS UP PAST ~1.2 m. A sample that
+    // sits more than `thickness` behind the surface is read as "I can see past that", so as
+    // the radius grows the samples land on geometry further away in depth and get thrown out
+    // one by one. The AO does not widen, it EVAPORATES, and the broad bands left behind read
+    // as stripes because the crisp contact line that used to anchor them has gone too.
+    // Measured, spread of the AO buffer at the loop camera (higher = more occlusion):
+    //   thickness fixed at 1:  r0.3 67, r0.6 65, r1.2 60, r2 31, r3.5 15, r5 13   <- collapse
+    //   thickness = radius:    r0.3 53, r0.6 41, r1.2 64, r2 39, r3.5 53, r5 68   <- holds
+    // One occluder-depth per radius is the physical reading and it is what makes the dial
+    // behave like a vignette on each surface rather than a contact line that dissolves.
+    const RT_AOTHICK = parseFloat(q.get('aothick') ?? '1.0');   // thickness / radius
+    // The floor gets its own radius and amount — see tools/ao-floor.js for how one pass
+    // serves two radii, and why "floor" is the world normal pointing up rather than a list
+    // of objects. These no longer track the wall values: dialled 2026-08-17 to roughly
+    // double the wall reach and a third more depth, which is the point of splitting them —
+    // the floor is the surface with room for a wide falloff, the walls want to stay open.
+    const RT_AOFRAD = parseFloat(q.get('aofrad') ?? String(10.2973 * BUILDING_SCALE));
+    const RT_AOFAMT = parseFloat(q.get('aofamt') ?? '1.328');
+    // The sun's angular RADIUS as a tangent — i.e. how big the source is in the sky, which
+    // is what decides how fast a shadow softens with distance. The real sun is 0.0046;
+    // this room is lit through a skylight the size of a bus, so it wants far more. Dialled
+    // back to 0.0136 with the rest of the grade — still 3x the real sun, but the shafts and
+    // the window shapes read harder than they did at 0.0552.
+    const RT_SUNANG = parseFloat(q.get('sunang') ?? '0.0136');
+    // GI. `gi` is the strength of the bounce, `gibias` how far along the normal a surface
+    // reaches when it samples the volume (the light-leak / dark-rim control).
+    const RT_GI      = parseFloat(q.get('gi') ?? '3.0');
+    // ★ WAS 2.0, AND THAT WAS THE CORNER GLOW IN n018 BEING PAID FOR TWICE. With the old
+    // sampler this dial was the only thing keeping a surface off the probe inside its own
+    // wall, so it got pushed to 0.9 of a probe spacing — where it cannot win, because it
+    // helps walls and hurts floors in the same move. Measured, GI alone, wall corner/mid
+    // against floor edge/mid: 1.45/1.51 at 0.4, 1.24/1.88 at 2.0. gi-volume.js now weights
+    // each probe by whether the surface can see it, so this is a small margin again.
+    // At 0.33: wall 0.97, floor 1.26. At 2.0 with the same sampler: wall 0.94, floor 1.62.
+    // Dialled to 0 in the 2026-08-17 grade. That is defensible now in a way it was not
+    // before: `givalid` below rejects the wall-cavity probes outright, so this dial is no
+    // longer load bearing and the bounce reads tighter to the geometry without it.
+    const RT_GIBIAS  = parseFloat(q.get('gibias') ?? '1.5');
+    // How hard a surface refuses light from probes behind it. 0 is plain trilinear, i.e.
+    // the pre-n018 sampler, kept dialable so the two can be compared rather than argued.
+    // ★ THIS IS 0 BY ART DIRECTION, WHICH MEANS THE n018 VISIBILITY WEIGHT IS OFF. It was
+    // always the smaller half of that fix — the grid ALIGNMENT was what took wall corner/mid
+    // from 1.24 to 0.94, and that is in the sampler unconditionally — but if corner glow is
+    // ever reported again, put this back to 1 before looking anywhere else.
+    const RT_GIVIS   = parseFloat(q.get('givis') ?? '0');
+    // ★ THE BRIGHT BAND ALONG EVERY WALL/FLOOR JUNCTION. The probe half a metre behind a
+    // wall is SIDEWAYS from the floor in front of it, so no normal-based weight can refuse
+    // it — measured 55% of the floor's bounce 15 cm from the wall, off a probe 3.4x
+    // brighter than the one in the room, and sharpening the cosine from exponent 2 to 16
+    // moved the glow 2.50 to 2.43. The bake now scores each probe by how much open sky it
+    // can see and this is the cut-off: in-room probes measure 0.00, the offender 0.31,
+    // fully outdoors 0.77-0.79. At 0.2 the floor profile goes flat (2.51 -> 0.97).
+    // 0 disables the test, for the A/B.
+    const RT_GIVALID = parseFloat(q.get('givalid') ?? '0.2016');
+    // ── the cat ─────────────────────────────────────────────────────────────
+    // He is here to be LIT, not to perform: no steering, no state machine, one looping
+    // clip. The point is that an irradiance volume can light a moving object and a
+    // lightmap cannot — his materials get the same gi.patch()/PCSS.patch() the building
+    // gets, so he picks up the bounce of wherever he is standing and casts a real shadow.
+    const RT_CAT     = q.get('cat') !== '0';
+    const CAT_FUR    = q.get('fur') ?? 'c6';          // the coat the pack shipped on the mesh
+    const CAT_CLIP   = q.get('catclip') ?? 'sit_loop';
+    // Walking is the default now. ?catwalk=0 parks him on CAT_CLIP where he was placed.
+    const CAT_WALK   = q.get('catwalk') !== '0';
+    const CAT_SPEED  = parseFloat(q.get('catspeed') ?? '0.45');
+    // ★ THE ARC, in metres — not a turn speed. A cat keeps walking and curves round; set
+    // a force or a rate directly and you get a pivot, which reads as a robot in a cat suit.
+    const CAT_TURN   = parseFloat(q.get('catturn') ?? '0.55');
+    // ★ THE TRAVEL SPEED THE WALK CLIP WAS AUTHORED FOR — MEASURED OFF THE CLIP AT LOAD,
+    // NOT TYPED. Rate is actual/this, so foot slide only vanishes when this is exactly right,
+    // and it had been ASSUMED equal to the travel speed, which makes the rate 1.0 and looks
+    // deliberate. It is really 0.472, so the paws swept back 4.9% faster than the room went
+    // past. See measureAuthoredSpeed() — `?catstride=` overrides if it ever needs forcing.
+    // Where he sits, in metres, x,z. Y is raycast onto the floor rather than typed, so a
+    // re-export that moves the floor does not leave him hovering or shin-deep.
+    // Measured, not eyeballed: rendered the floor with the SUN ALONE, sampled a grid of
+    // points across it and took the brightest. The first guess was 1.4 m off and put him
+    // in a shadow band, where he read as unlit and looked like a broken material.
+    const CAT_POS    = (q.get('catpos') ?? '-4.7,2.85').split(',').map(Number);
+    const CAT_YAW    = parseFloat(q.get('catyaw') ?? '125');   // degrees, 0 = facing +Z
+    const GI_SPACING = parseFloat(q.get('gistep') ?? '2.2');
+    const GI_BOUNCES = parseInt(q.get('gibounce') ?? '2', 10);
+    const GI_CUBE    = parseInt(q.get('gicube') ?? '16', 10);
+    const GI_FORCE   = q.get('gibake') === '1';   // ignore the cached volume and re-bake
+    // The hemisphere light the volume replaces. Kept at 0 by default and left on a dial,
+    // because it is the honest A/B: turn GI off and this back on and you are looking at
+    // exactly what the rig did before — uniform ambient with no idea where the walls are.
+    const RT_BOUNCE = parseFloat(q.get('bounce') ?? '0.0');
+
+    const scene = new THREE.Scene();
+
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: {
+        uZenith:  { value: new THREE.Color(SKY_ZENITH) },
+        uHorizon: { value: new THREE.Color(SKY_HORIZON) },
+        uGround:  { value: new THREE.Color(SKY_GROUND) },
+        uGain:    { value: SKY_GAIN }
+      },
+      vertexShader: `
+        varying vec3 vDir;
+        void main() {
+          vDir = normalize(position);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 uZenith, uHorizon, uGround;
+        uniform float uGain;
+        varying vec3 vDir;
+        void main() {
+          float h = vDir.y;
+          // tight falloff near the horizon, slow fade to zenith — a flat
+          // linear ramp reads as a computer gradient, this reads as air
+          vec3 up   = mix(uHorizon, uZenith, pow(clamp(h, 0.0, 1.0), 0.45));
+          vec3 down = mix(uHorizon, uGround, pow(clamp(-h, 0.0, 1.0), 0.5));
+          gl_FragColor = vec4((h > 0.0 ? up : down) * uGain, 1.0);
+        }`
+    });
+    const sky = new THREE.Mesh(new THREE.SphereGeometry(400, 32, 24), skyMat);
+    sky.renderOrder = -1;          // paint it first, everything else draws over
+    sky.frustumCulled = false;
+    scene.add(sky);
+
+    RectAreaLightUniformsLib.init();
+    const rig = new THREE.Group();
+    rig.name = 'RealtimeRig';
+    scene.add(rig);
+
+    // Direction the light TRAVELS, from azimuth/elevation.
+    function sunDirection(azDeg, elDeg) {
+      const az = THREE.MathUtils.degToRad(azDeg), el = THREE.MathUtils.degToRad(elDeg);
+      return new THREE.Vector3(
+        -Math.cos(el) * Math.sin(az), -Math.sin(el), -Math.cos(el) * Math.cos(az)).normalize();
+    }
+    let LIGHT_DIR = sunDirection(RT_SUN_AZ, RT_SUN_EL);
+
+    const sun = new THREE.DirectionalLight(0xfff3e0, RT_SUN);
+    sun.castShadow = true;
+    // 4096, not 2048. The building grew to ~20 m across when the second bay arrived, and
+    // 2048 over that is 1.4 texels/cm — coarse enough that PCSS's blocker search reads
+    // stair-steps as real geometry and the penumbra estimate goes lumpy.
+    sun.shadow.mapSize.set(4096, 4096);
+    // ★ shadow.bias IS IN NORMALISED DEPTH, SO ITS REAL SIZE DEPENDS ON THE SHADOW CAMERA.
+    // This is the light leak in n010 and it is a units bug, not a precision one. A bias of
+    // -0.0006 across the old 33 m shadow box was 2 cm; once the box was fitted to the whole
+    // building the range grew to 50 m and the SAME NUMBER became 3 cm. Anything within 3 cm
+    // of its blocker is then pushed in front of it and reads as lit — which draws a bright
+    // strip along every wall/floor junction and looks exactly like sun coming through the
+    // wall. Measured at the junction: sun contribution 33 at 6 cm out with the old value,
+    // 8 with this one. So express it in METRES and convert in aimSun(), where the depth
+    // range is known; then re-fitting the shadow box cannot silently change its meaning.
+    const SHADOW_BIAS_M = parseFloat(q.get('shadowbias') ?? String(0.002 * BUILDING_SCALE));  // 1.2 mm at 60%
+    // normalBias stays the acne control. It is already in world units, so it does not
+    // suffer the above, and under PCSS it is what actually clears the radiator banding.
+    // 0.06 was fitted while the depth bias was doing 3 cm of hidden work; with that fixed
+    // the same job is done at a tenth of the offset. Measured at the wall/floor junction,
+    // sun contribution 6 cm out: 8 at 0.06, 0 at 0.006 — and the radiator stays clean.
+    sun.shadow.normalBias = parseFloat(q.get('shadownormal') ?? String(0.006 * BUILDING_SCALE));
+    rig.add(sun, sun.target);
+
+    // Rect lights fill the actual roof apertures, so the room reads as lit THROUGH a hole
+    // rather than by a floating lamp. They cast no shadow in three — the sun owns those.
+    // A pool, because how many skylights there are is a property of the .glb, not of this
+    // file, and the dials have to exist before the model has loaded.
+    const MAX_SKYLIGHTS = 4;
+    const skylights = [];
+    for (let i = 0; i < MAX_SKYLIGHTS; i++) {
+      const l = new THREE.RectAreaLight(0xbfd8f2, 0, 1, 1);
+      l.visible = false;
+      rig.add(l);
+      skylights.push(l);
+    }
+
+    // See RT_SKYSHADOW. Aimed and fitted in aimSkyShadow() once the building is measured.
+    const skyShadow = new THREE.DirectionalLight(0xbfd8f2, RT_SKYSHADOW);
+    skyShadow.castShadow = RT_SKYSHADOW > 0;
+    // Half the sun's map. This one is a soft downward contact shadow, not a window shape, so
+    // it has no fine detail to resolve and 4096 would be paying twice for nothing.
+    skyShadow.shadow.mapSize.set(2048, 2048);
+    rig.add(skyShadow, skyShadow.target);
+
+    // The uniform-ambient stand-in the volume replaces. Off by default.
+    const bounce = new THREE.HemisphereLight(SKY_HORIZON, 0x6b5844, RT_BOUNCE);
+    rig.add(bounce);
+
+    // IBL from the scene's own sky, so reflections agree with what is out the window.
+    // Deliberately LOW now: this used to carry the ambient fill, and uniform fill is
+    // exactly what the GI volume is here to stop doing. It is for specular, not for light.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    const skyOnly = new THREE.Scene();
+    skyOnly.add(new THREE.Mesh(sky.geometry, sky.material));
+    // ★ `fromScene` DEFAULTS TO far = 100 AND THE SKY DOME HAS A RADIUS OF 400, SO THIS
+    // RENDERED AN EMPTY CUBE AND THE ENVIRONMENT MAP CAME OUT PURE BLACK. Nothing errors:
+    // the Sky IBL dial simply moved a multiplier against zero, which reads as a dead
+    // control. Measured before: mean value of the map 0.0000, and sweeping the dial 0 to 10
+    // — fifty times the shipped value — changed the brightest pixel in the frame by 2/255.
+    // The plumbing was never the problem; swapping in a white environment moved pixels by
+    // 233 through the same code path. Size the far plane to the dome, not to the default.
+    const skyRadius = sky.geometry.parameters?.radius ?? 400;
+    const envRT = pmrem.fromScene(skyOnly, 0.04, 0.1, skyRadius * 2);
+    scene.environment = envRT.texture;
+    scene.environmentIntensity = RT_ENVI;
+
+    let gi = null;                 // the irradiance volume, once the model is measured
+
+    function setRigEnabled(on) {
+      rig.visible = on;
+      scene.environmentIntensity = on ? RT_ENVI : 0;
+      if (gi) gi.setIntensity(on ? RT_GI : 0);
+    }
+
+    let camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 500);
+
+    // Ground-truth-ish occlusion. GTAO darkens contact and creases — the fine detail the
+    // probe grid is far too coarse to resolve, so the two are complementary rather than
+    // redundant. Guarded because it is the one pass here that can fail outright on a driver.
+    let aoPass = null;
+    if (RT_AO) {
+      try {
+        aoPass = new GTAOPass(scene, camera, innerWidth, innerHeight);
+        aoPass.output = GTAOPass.OUTPUT.Default;
+        aoPass.blendIntensity = RT_AOAMOUNT;
+      } catch (e) {
+        console.warn('GTAO unavailable:', e);
+        aoPass = null;
+      }
+    }
+
+    // Split the one pass so the floor can carry a different radius and amount from the
+    // walls. Guarded the same way the pass is: it patches three's shipped GTAOShader by
+    // exact string and throws on a miss, and losing the split is better than losing the AO.
+    let aoFloor = null;
+    if (aoPass) {
+      try {
+        aoFloor = splitFloorAO(aoPass, { thicknessRatio: RT_AOTHICK });
+      } catch (e) {
+        console.warn('AO floor split unavailable:', e);
+      }
+    }
+
+    // Radius and thickness are one control, not two — see RT_AOTHICK. Everything that
+    // moves the radius goes through here so the pair can never drift apart again.
+    function setAORadius(v) {
+      if (!aoPass) return;
+      aoPass.gtaoMaterial.uniforms.radius.value = v;
+      aoPass.gtaoMaterial.uniforms.thickness.value = v * RT_AOTHICK;
+    }
+    setAORadius(RT_AORADIUS);
+    if (aoFloor) { aoFloor.setFloorRadius(RT_AOFRAD); aoFloor.setFloorAmount(RT_AOFAMT); }
+
+    // Raymarched shafts — the alternative to the quads, switchable at runtime so the two
+    // can be compared honestly rather than argued about. Built here because createLooks
+    // takes its passes up front, and pointed at the sun once the model has loaded.
+    // Raymarched is the default now. The cards stay behind the dropdown as the cheap
+    // fallback — they are one draw call each against a per-pixel march — but they are no
+    // longer what the loop ships with.
+    let volMode = q.get('volmode') ?? 'ray';          // 'ray' | 'off'
+    const volPass = new VolumetricLightPass({
+      depthTexture: depthRT.depthTexture,
+      getCamera: () => camera,
+      steps: parseInt(q.get('volsteps') ?? '48', 10),
+      color: SHAFT_COLOR,
+    });
+    volPass.enabled = volMode === 'ray';
+
+    // The Volumetrics on/off button hides everything in the list it was given, by setting
+    // `.visible`. A composer pass is not an Object3D and has no such property, so without
+    // this the button would switch the atmosphere off and leave the raymarched shafts
+    // running — the one thing that toggle exists to prevent. A tiny proxy puts the pass in
+    // the same list, and keeps `looks.js` unaware that passes exist.
+    const volProxy = {
+      get visible() { return volPass.enabled; },
+      set visible(on) { volPass.enabled = on && volMode === 'ray'; },
+    };
+    // Fitted, not guessed. The phase function is normalised to integrate to 1 over the
+    // sphere, so its value at any one angle is ~0.02 — multiply that by a "density" of 0.02
+    // and the shafts are invisible, which is exactly what the first run rendered. Measured
+    // frame means at this camera: 0.02 -> 68.7 (nothing), 0.12 -> beams read, 0.3 -> the
+    // room is fog, 0.5+ -> white. 0.08 is the subtle end of usable.
+    // per-metre, so it goes the OTHER way: a shorter ray needs a denser medium to read the same
+    volPass.uniforms.uDensity.value = parseFloat(q.get('voldens') ?? q.get('voldensity') ?? String(0.0417 * INV_BS));
+    volPass.uniforms.uG.value       = parseFloat(q.get('volg') ?? '0.72');
+
+    const looks = createLooks({
+      renderer, scene, getCamera: () => camera,
+      initial: q.get('look') || 'original',
+      menu: q.get('looks') !== '0',
+      extraPasses: [volPass, ...(aoPass ? [aoPass] : [])],
+      // Multisampling on the composer's own target — the renderer's `antialias: true` has
+      // never applied here, because nothing is drawn straight to the canvas. ?msaa=0 to A/B.
+      msaa: parseInt(q.get('msaa') ?? '4', 10),
+      volumetrics: [volProxy],
+      volumetricsOn: q.get('vol') !== '0',
+      dials: [
+        // Density of the air. Curved because everything usable lives near the bottom —
+        // 0.3 is already fog. See the fitted values where the pass is constructed.
+        { id: 'voldens', label: 'Shafts', min: 0, max: 0.4, curve: 2.2,
+          value: volPass.uniforms.uDensity.value,
+          onInput: (v) => { volPass.uniforms.uDensity.value = v; } },
+        { id: 'sun', label: 'Sun', min: 0, max: 8, curve: 1.6, value: RT_SUN,
+          onInput: (v) => { sun.intensity = v; } },
+        // Azimuth and elevation move the sun for real — shadows, shafts and, after a
+        // re-bake, the bounce. The shafts follow on release rather than per frame; they
+        // are rebuilt geometry, not a uniform.
+        { id: 'sunaz', label: 'Sun azimuth', min: 0, max: 360, value: RT_SUN_AZ,
+          onInput: (v) => setSunAngles(v, null) },
+        { id: 'sunel', label: 'Sun elevation', min: 5, max: 89, value: RT_SUN_EL,
+          onInput: (v) => setSunAngles(null, v) },
+        // Softness is now a physical property — the apparent size of the source — instead
+        // of a blur radius. Same dial position means the same thing at every distance.
+        { id: 'sunang', label: 'Sun size', min: 0.002, max: 0.16, curve: 1.8, value: RT_SUNANG,
+          onInput: (v) => PCSS.setSunAngle(v) },
+        { id: 'skyl', label: 'Skylight', min: 0, max: 8, curve: 1.6, value: RT_SKYL,
+          onInput: (v) => { for (const l of skylights) if (l.visible) l.intensity = v; } },
+        // The shadow the rect lights cannot cast — see RT_SKYSHADOW. 0 removes it entirely.
+        { id: 'skyshadow', label: 'Skylight shadow', min: 0, max: 3, curve: 1.4, value: RT_SKYSHADOW,
+          onInput: (v) => { skyShadow.intensity = v; skyShadow.castShadow = v > 0; } },
+        { id: 'gi', label: 'GI bounce', min: 0, max: 3, curve: 1.4, value: RT_GI,
+          onInput: (v) => { if (gi && rig.visible) gi.setIntensity(v); } },
+        // Too low and every surface gets a dark rim where it samples a probe inside its
+        // own wall; too high and light leaks through walls. Scaled to probe spacing.
+        // Both in world units and both worth reaching for before the GI dials — a scene
+        // that feels flat is usually short of contact shading, not short of bounce.
+        // Max is 12, not 5. 5 was the ceiling from when thickness was pinned at 1 m and the
+        // AO evaporated on the way up; with the two coupled the useful range goes further.
+        // Measured spread of the AO buffer at the loop camera: r2 34, r5 70, r8 79, r12 81,
+        // r20 76, r35 48, r60 35 — it PEAKS around 8-12 and then falls away again, because
+        // the building is only 19.6 x 19.9 m and past that there is no more occluder to
+        // find. Frame cost is flat across the whole range (3.85 ms at r5, 3.52 at r20,
+        // 3.86 at r60), so 12 is where the picture stops improving, not where it gets
+        // expensive. Beyond ~20 it is strictly worse, hence the cap rather than a bigger one.
+        { id: 'aorad', label: 'AO radius', min: 0.1, max: 12, curve: 1.6, value: RT_AORADIUS,
+          onInput: setAORadius },
+        { id: 'aoamt', label: 'AO amount', min: 0, max: 2, value: RT_AOAMOUNT,
+          onInput: (v) => { if (aoPass) aoPass.blendIntensity = v; } },
+        // Floor only. "Floor" is any surface whose world normal points up, so table tops
+        // and the tops of crates go with it — see tools/ao-floor.js. Same 12 m ceiling as
+        // the wall radius, and for the same measured reason.
+        { id: 'aofrad', label: 'AO radius (floor)', min: 0.1, max: 12, curve: 1.6, value: RT_AOFRAD,
+          onInput: (v) => { if (aoFloor) aoFloor.setFloorRadius(v); } },
+        { id: 'aofamt', label: 'AO amount (floor)', min: 0, max: 2, value: RT_AOFAMT,
+          onInput: (v) => { if (aoFloor) aoFloor.setFloorAmount(v); } },
+        // Range is 0-1.5 now, not 0-2.5. The useful band moved down when the sampler
+        // stopped needing this dial to do the visibility work — see RT_GIBIAS.
+        { id: 'gibias', label: 'GI bias', min: 0, max: 1.5, value: RT_GIBIAS,
+          onInput: (v) => { if (gi) gi.setNormalBias(v); } },
+        // 0 is plain trilinear — the old sampler, and the honest A/B for n018. Leave at 1.
+        { id: 'givis', label: 'GI visibility', min: 0, max: 1, value: RT_GIVIS,
+          onInput: (v) => { if (gi) gi.setBackWeight(v); } },
+        // Live, because the score is baked and only the cut-off is read per frame — so
+        // this can be swept against the wall junction without re-baking. 0 = off.
+        { id: 'givalid', label: 'GI in-room only', min: 0, max: 0.6, value: RT_GIVALID,
+          onInput: (v) => { if (gi) gi.setValidThreshold(v); } },
+        // 'Ambient (old)' is gone from the panel. It was the honest A/B against the uniform
+        // hemisphere fill the GI volume replaced, that comparison has been made, and it sat
+        // at 0 in every build since. The light and `?bounce=` remain for anyone who wants
+        // to make the comparison again.
+        { id: 'envi', label: 'Sky IBL', min: 0, max: 3, curve: 1.4, value: RT_ENVI,
+          onInput: (v) => { if (rig.visible) scene.environmentIntensity = v; } },
+      ],
+
+      choices: [
+        // Cards are the six-quad fake; Raymarched walks the shadow map per pixel and has
+        // no geometry at all. Same scene, same sun — the difference is entirely in how the
+        // air is drawn.
+        { id: 'volmode', label: 'Shafts', value: volMode,
+          options: [{ label: 'Raymarched', value: 'ray' },
+                    { label: 'Off', value: 'off' }],
+          onChange: (v) => {
+            volMode = v;
+            volPass.enabled = v === 'ray';
+          } },
+        { id: 'mode', label: 'Lighting', value: RT_MODE,
+          options: [{ label: 'Real-time', value: 'rt' }, { label: 'Baked', value: 'baked' },
+                    { label: 'Both', value: 'both' }],
+          onChange: (v) => window.__rt && window.__rt.applyLightingMode(v) },
+      ],
+    });
+    camera.position.set(-12, 2, 0);
+
+    let controls;
+    let fly;
+
+    const state = { meshes: 0, withLM: 0, tris: 0, cam: 'fallback', gi: 'off' };
+
+    // Horizontal field of view is the thing to preserve across canvas shapes —
+    // it is what Blender holds constant for a landscape render.
+    let hFov = null, authoredAspect = null;
+    function applyFov() {
+      camera.aspect = innerWidth / innerHeight;
+      if (hFov) {
+        camera.fov = THREE.MathUtils.radToDeg(
+          2 * Math.atan(Math.tan(hFov / 2) / camera.aspect));
+      }
+      camera.updateProjectionMatrix();
+    }
+
+    // ── measuring the building ──────────────────────────────────────────────
+    // Everything the rig needs, read out of the model. Glass is the tell: a pane is a
+    // hole in the building, and its bounding box is the aperture.
+    const GLASS_RE = /glass/i;
+    // Things that must not cast a shadow. Glass is obvious — 48 panes that each behave
+    // like a lid means the sun never enters the building at all. Decals are the same trap
+    // wearing a different hat: they are flat quads sitting ON the window geometry, so the
+    // light gets through the glass and is then stopped a millimetre later by a dirt
+    // texture. Both read as "the real-time lighting is broken", not as a shadow flag.
+    const NOCAST_RE = /glass|decal/i;
+
+    // A pane's OWN plane, not its bounding box. The roof glazing here is a sawtooth pitched
+    // at 57 degrees, so a flat 10.36 x 3.82 m sheet has a 3.21 m TALL axis-aligned box —
+    // and a rig built from that box gets the size, the position and the aim all wrong.
+    // Returns the inward normal and the extents measured along the plane's own two axes,
+    // which is exactly what a RectAreaLight's width/height/lookAt want.
+    function planeOf(mesh, centre) {
+      const nrm = mesh.geometry.attributes.normal;
+      const n = new THREE.Vector3(), t = new THREE.Vector3();
+      for (let i = 0; i < nrm.count; i++) n.add(t.fromBufferAttribute(nrm, i));
+      n.applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld));
+      // A shell whose normals cancel tells us nothing; a roof light points down anyway.
+      if (n.lengthSq() < 1e-8) n.set(0, -1, 0);
+      n.normalize();
+      // Whichever way the artist wound the quad, a roof light faces the room.
+      if (n.y > 0) n.negate();
+      // Degenerate only if the pane is dead flat, where any in-plane axis will do.
+      const up = Math.abs(n.y) > 0.999 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      const u = new THREE.Vector3().crossVectors(up, n).normalize();
+      const v = new THREE.Vector3().crossVectors(n, u).normalize();
+      const pos = mesh.geometry.attributes.position, p = new THREE.Vector3();
+      let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
+      for (let i = 0; i < pos.count; i++) {
+        p.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld).sub(centre);
+        uMin = Math.min(uMin, p.dot(u)); uMax = Math.max(uMax, p.dot(u));
+        vMin = Math.min(vMin, p.dot(v)); vMax = Math.max(vMax, p.dot(v));
+      }
+      return { normal: n, uSize: uMax - uMin, vSize: vMax - vMin };
+    }
+
+    function measureApertures(root) {
+      const panes = [];
+      root.traverse((o) => {
+        if (!o.isMesh) return;
+        const mats = Array.isArray(o.material) ? o.material : [o.material];
+        // Match on the OBJECT name as well as the material. The far bay's roof light is
+        // `SM_DPW_WindowPanel_002002` and carries M_DPW_DirtDecal rather than a glass
+        // material — there is no glass mesh there at all — so a material-only test misses
+        // it and that whole bay gets no direct light. Anything the artist called a window
+        // panel is an opening, whatever it happens to be textured with.
+        const isPane = mats.some((m) => GLASS_RE.test(m?.name || '')) || /WindowPanel/i.test(o.name);
+        if (!isPane) return;
+        const b = new THREE.Box3().setFromObject(o);
+        const size = b.getSize(new THREE.Vector3());
+        const area = Math.max(size.x * size.z, size.x * size.y, size.z * size.y);
+        const centre = b.getCenter(new THREE.Vector3());
+        panes.push({ box: b, size, area, centre, plane: planeOf(o, centre) });
+      });
+      // Roof lights are the ones high up. The obvious test — "flat, so thin in Y" — is
+      // WRONG here and finds nothing: this roof is PITCHED, so a skylight's bounding box
+      // is 3.2 m tall despite being a flat pane. Height above the floor separates them
+      // cleanly (skylight centres sit at 5.6 m, the arched wall windows at 0.2 m).
+      // Only roof lights get a rect light — they are the direct source. Wall windows
+      // reach the room through the GI volume, which sees the sky through them as it bakes.
+      const h = buildingBox.max.y - buildingBox.min.y;
+      const roof = panes.filter((p) => p.centre.y > buildingBox.min.y + 0.55 * h && p.area > 3);
+      roof.sort((a, b) => b.area - a.area);
+      return { panes, roof: roof.slice(0, MAX_SKYLIGHTS) };
+    }
+
+    let buildingBox = new THREE.Box3();
+    let apertures = { panes: [], roof: [] };
+
+    // Aim the sun down the measured ray and fit its shadow box to the building. A tight
+    // ortho box is the whole game for shadow resolution — 4096 across 24 units is ~1.7
+    // texels/cm, across the default 100 it would be 0.4 and PCSS would have nothing to
+    // read.
+    function aimSun() {
+      const c = buildingBox.getCenter(new THREE.Vector3());
+      const r = buildingBox.getSize(new THREE.Vector3()).length() * 0.5;
+      sun.position.copy(c).sub(LIGHT_DIR.clone().multiplyScalar(r * 1.6));
+      sun.target.position.copy(c);
+      sun.target.updateMatrixWorld();
+      const sc = sun.shadow.camera;
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
+      sc.near = 0.5; sc.far = r * 3.4;
+      sc.updateProjectionMatrix();
+      // Convert the bias from metres now that the depth range is known — see SHADOW_BIAS_M.
+      sun.shadow.bias = -(SHADOW_BIAS_M / (sc.far - sc.near));
+      // PCSS converts depth differences into metres using these, so they must be told.
+      PCSS.configureFromLight(sun);
+    }
+
+    // Straight down, over the middle of the building. A roof light's average direction IS
+    // down — the apertures are pitched, but what comes through them is most of the sky.
+    //
+    // ★ IT HAS TO START BELOW THE GLAZING, NOT ABOVE THE BUILDING. Put it over the roof and
+    // the ROOF is the first thing in its shadow map, so it becomes a second sun: light only
+    // reaches the floor through the aperture slots and everything else is in shadow. Measured
+    // that way it was useless — intensity 20 moved the frame mean by 1.7 while the sun moves
+    // it by 19 at 2.6. Hanging the shadow camera's near plane just under the apertures takes
+    // the roof out of the frustum entirely, so nothing up there casts and the light behaves
+    // like what it represents: sky that has ALREADY come through the hole.
+    function aimSkyShadow() {
+      const c = buildingBox.getCenter(new THREE.Vector3());
+      const size = buildingBox.getSize(new THREE.Vector3());
+      const r = Math.max(size.x, size.z) * 0.5;
+      // The aperture plane, measured off the roof lights rather than typed.
+      const apY = apertures.roof.length
+        ? apertures.roof.reduce((a, p) => a + p.centre.y, 0) / apertures.roof.length
+        : buildingBox.min.y + size.y * 0.75;
+      skyShadow.position.set(c.x, apY, c.z);
+      skyShadow.target.position.set(c.x, buildingBox.min.y, c.z);
+      skyShadow.target.updateMatrixWorld();
+      const sc = skyShadow.shadow.camera;
+      sc.left = -r; sc.right = r; sc.top = r; sc.bottom = -r;
+      // near just below the light so the roof and the glazing bars are outside the frustum
+      // and cannot cast; far a little past the floor.
+      sc.near = 0.15;
+      sc.far = (apY - buildingBox.min.y) + 1.0;
+      sc.updateProjectionMatrix();
+      // Same metres-not-normalised-depth rule as the sun — see SHADOW_BIAS_M.
+      skyShadow.shadow.bias = -(SHADOW_BIAS_M / (sc.far - sc.near));
+      skyShadow.shadow.normalBias = 0.006;
+    }
+
+    function setSunAngles(az, el) {
+      if (az !== null) setSunAngles.az = az;
+      if (el !== null) setSunAngles.el = el;
+      LIGHT_DIR = sunDirection(setSunAngles.az, setSunAngles.el);
+      aimSun();
+    }
+    setSunAngles.az = RT_SUN_AZ;
+    setSunAngles.el = RT_SUN_EL;
+
+    // ── load ────────────────────────────────────────────────────────────────
+    // The lightmap is a real HDR: the window is ~9x brighter than the floor.
+    // An 8-bit PNG would clip that off, which is why this is .hdr.
+    new RGBELoader().load(bust('../../assets/factory/lightmap_4k.hdr'), (lm) => {
+      lm.flipY = FLIP_Y;              // glTF UVs are top-left origin; Blender's are bottom-left
+      lm.channel = 1;                 // sample using uv1 (TEXCOORD_1) = our Lightmap set
+      lm.colorSpace = THREE.LinearSRGBColorSpace;
+      const MIPS = (q.get('mip') ?? '1') === '1';
+      lm.generateMipmaps = MIPS;
+      lm.minFilter = MIPS ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
+      lm.magFilter = THREE.LinearFilter;
+      lm.wrapS = lm.wrapT = THREE.ClampToEdgeWrapping;
+      lm.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      lm.needsUpdate = true;
+
+      // Blender re-creates an "automap" UV set during modifier evaluation on a few
+      // objects, so those export THREE UV sets and the lightmap lands on uv2 instead
+      // of uv1. three.js binds a UV channel to the TEXTURE, not the mesh — so we need
+      // one texture instance per channel and pick the right one per mesh.
+      const lmForChannel = {};
+      const lightmapFor = (geom) => {
+        const ch = geom.attributes.uv2 ? 2 : (geom.attributes.uv1 ? 1 : 0);
+        if (!lmForChannel[ch]) {
+          const t = lm.clone();
+          t.channel = ch;
+          t.needsUpdate = true;
+          lmForChannel[ch] = t;
+        }
+        return { tex: lmForChannel[ch], ch };
+      };
+
+      new GLTFLoader().load(bust('../../assets/factory/factory_60.glb'), async (gltf) => {
+        const chCount = {};
+        const litMaterials = new Set();
+
+        gltf.scene.traverse((o) => {
+          if (o.isMesh) {
+            state.meshes++;
+            state.tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+            const picked = lightmapFor(o.geometry);
+            chCount[picked.ch] = (chCount[picked.ch] || 0) + 1;
+            state.channels = chCount;
+            const hasUV1 = picked.ch > 0;
+            if (DEBUG_LM) {
+              o.material = new THREE.ShaderMaterial({
+                side: THREE.DoubleSide,
+                uniforms: { tLM: { value: picked.tex }, uScale: { value: LM_INTENSITY } },
+                vertexShader: (picked.ch === 2 ? 'attribute vec2 uv2;\n#define LMUV uv2\n'
+                                               : 'attribute vec2 uv1;\n#define LMUV uv1\n') + `
+                  varying vec2 vUv1;
+                  void main() {
+                    vUv1 = LMUV;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                  }`,
+                fragmentShader: `
+                  uniform sampler2D tLM;
+                  uniform float uScale;
+                  varying vec2 vUv1;
+                  void main() {
+                    vec3 c = texture2D(tLM, vUv1).rgb * uScale;
+                    c = c / (1.0 + c);                 // squash the HDR range so I can see it
+                    gl_FragColor = vec4(pow(c, vec3(1.0/2.2)), 1.0);
+                  }`
+              });
+            } else if (DEBUG_UV) {
+              o.material = new THREE.ShaderMaterial({
+                side: THREE.DoubleSide,
+                vertexShader: `
+                  attribute vec2 uv1;
+                  varying vec2 vUv1;
+                  void main() {
+                    vUv1 = uv1;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                  }`,
+                fragmentShader: `
+                  varying vec2 vUv1;
+                  void main() { gl_FragColor = vec4(vUv1.x, vUv1.y, 0.0, 1.0); }`
+              });
+            } else {
+              // Keep the material glTF gave us — it carries the brick, wood and
+              // the sign cut-outs. We only bolt our lighting onto it.
+              const mats = Array.isArray(o.material) ? o.material : [o.material];
+              for (const mat of mats) {
+                if (hasUV1) {
+                  mat.lightMap = picked.tex;
+                  mat.lightMapIntensity = LM_INTENSITY;
+                  // Real lights ADD to the lightmap rather than replacing it, so leaving
+                  // both on doubles the exposure. Held on the material so the mode toggle
+                  // can swap between them without reloading the glb.
+                  mat.userData.bakedLightMap = picked.tex;
+                  mat.envMapIntensity = 1.0;
+                }
+
+                // Almost every material arrives flagged transparent. Blended
+                // transparency does not write depth, so solid brick sorts against
+                // solid brick back-to-front and punches holes through itself.
+                // Only real glass wants blending; cut-outs (the signs) want
+                // alpha-test, which DOES write depth and sorts correctly.
+                if (mat.transparent) {
+                  const isGlass = GLASS_RE.test(mat.name || '');
+                  if (isGlass) {
+                    mat.depthWrite = false;
+                    mat.opacity = 0.25;
+                  } else if (mat.map && /sign/i.test(mat.name || '')) {
+                    mat.transparent = false;
+                    mat.alphaTest = 0.5;
+                    mat.depthWrite = true;
+                  } else {
+                    mat.transparent = false;
+                    mat.alphaTest = 0;
+                    mat.depthWrite = true;
+                  }
+                }
+                // ★ A DECAL'S ALPHA CHANNEL IS THERE AND IS BEING THROWN AWAY.
+                // M_DPW_DirtDecal's base colour has a real alpha channel — measured
+                // min 0, max 255, mean 42.5, i.e. mostly clear with dirt streaks. But
+                // glTF only honours that when the material's alphaMode is BLEND or MASK,
+                // and Blender writes OPAQUE unless the blend mode is set on the material.
+                // So the whole thing renders as a solid sheet, and since these sit over
+                // the roof glazing it reads as "the window is filthy" rather than "the
+                // alpha was dropped". Blend rather than alphaTest because dirt is a soft
+                // gradient; a cut-out would give it hard edges.
+                if (/decal/i.test(mat.name || '') && mat.map) {
+                  mat.transparent = true;
+                  mat.alphaTest = 0;
+                  mat.depthWrite = false;
+                }
+                // Blender's viewport draws both faces; glTF defaults to single-sided.
+                // Standing INSIDE the room we look at the back of every wall, so
+                // single-sided culls them and you see straight through into unlit space.
+                mat.side = SIDE;
+                if (mat.isMeshStandardMaterial) {
+                  mat.roughness = 1.0;
+                  mat.metalness = 0.0;
+                  litMaterials.add(mat);
+                }
+
+                // ★ THE CONCRETE TRIM ATLAS IS GENUINELY DARK AT SOURCE — ABOUT TWELVE
+                //   TIMES TOO DARK — AND IT IS NOT A COLOUR-SPACE BUG.
+                // Worth recording, because it looks like one and I chased it as one. The
+                // export is faithful: sampling the same pixels either side of the .glb gives
+                // the same bytes. What misled me was Blender's `image.pixels`, which returns
+                // the sRGB-ENCODED bytes normalised to 0-1 for a byte image, NOT linear
+                // floats — 0.6784 * 255 = exactly 173. Treating those as linear "predicts" a
+                // double-decode that matches the .glb perfectly, because it is the same
+                // number compared with itself. Tag the albedo linear on that theory and the
+                // columns stay black, which is what gave it away.
+                // The texture really does read sRGB 35,31,28 in the source file, against
+                // 136,131,128 for M_DPW_Concrete. Fix it in the source; lift it here meanwhile.
+                if (/facade_trim_01/i.test(mat.name || '')) {
+                  mat.color.setScalar(CONCRETE_LIFT);
+                }
+
+                // ★ ANISOTROPY, OR EVERY SURFACE YOU ARE NOT LOOKING STRAIGHT AT GOES SOFT.
+                // GLTFLoader leaves textures at anisotropy 1. Seen at a grazing angle a
+                // texel's footprint on screen is a long thin sliver, and with one sample the
+                // mip level has to be chosen from the LONG axis — so the surface blurs along
+                // the direction it is stretched. The floor and any angled wall go soft while
+                // a wall you face head-on stays sharp, which reads exactly like a shallow
+                // depth of field and sends you looking for a post-process that does not
+                // exist. It is also easy to blame the source textures or the Blender export,
+                // and it is neither.
+                // Measured before the fix: 27 of 30 materials at anisotropy 1 on a GPU
+                // offering 16. Verify with `map.anisotropy` after a change near here — this
+                // loop has been deleted once already by an edit that spanned it.
+                for (const tex of [mat.map, mat.normalMap, mat.roughnessMap, mat.metalnessMap,
+                                   mat.aoMap, mat.emissiveMap, mat.alphaMap]) {
+                  if (tex) { tex.anisotropy = MAX_ANISOTROPY; tex.needsUpdate = true; }
+                }
+                mat.needsUpdate = true;
+              }
+            }
+            if (hasUV1) state.withLM++;
+          }
+          if (o.isCamera) {
+            camera = o;
+            // glTF stores VERTICAL fov only. Blender's sensor_fit=AUTO fits the
+            // sensor HORIZONTALLY on a landscape frame, so the vertical fov it
+            // exports is only correct at Blender's own render aspect. Lock the
+            // HORIZONTAL fov instead, and re-derive vertical from it.
+            authoredAspect = camera.aspect || (innerWidth / innerHeight);
+            const vfov = THREE.MathUtils.degToRad(camera.fov);
+            hFov = 2 * Math.atan(Math.tan(vfov / 2) * authoredAspect);
+            applyFov();
+            state.cam = (o.name || 'from glb') +
+              ` hfov ${(THREE.MathUtils.radToDeg(hFov)).toFixed(1)}°`;
+            // ★ GTAOPass captured the PLACEHOLDER camera when it was constructed, and the
+            // glTF's own camera has just replaced it. Left alone, the AO is computed from
+            // a camera that never moves, so it paints a fixed smear across the screen that
+            // ignores where you are looking. RenderPass gets this right via getCamera();
+            // extra passes hold their own reference and have to be told.
+            if (aoPass) aoPass.camera = camera;
+          }
+        });
+        // ★ Shrink the building BEFORE anything measures it. Every derived thing in this
+        // scene — the glass apertures, the rect lights built from them, the GI volume
+        // bounds, the shadow box — is read off the .glb at load, so doing it here and
+        // nowhere else is enough to move all of them together.
+        gltf.scene.scale.setScalar(MODEL_SCALE);
+        gltf.scene.updateMatrixWorld(true);
+        scene.add(gltf.scene);
+
+        // ...then lift the camera OUT of the shrunken group. Left inside, its own
+        // matrixWorld carries the 0.6 and the view matrix (the inverse) cancels it
+        // exactly — the render comes back byte-identical and the scale reads as a dead
+        // control. Keep the scaled world position, drop the scale.
+        if (camera) {
+          const p = new THREE.Vector3(), r = new THREE.Quaternion(), s = new THREE.Vector3();
+          camera.updateMatrixWorld(true);
+          camera.matrixWorld.decompose(p, r, s);
+          scene.add(camera);                       // re-parents, to the unscaled root
+          camera.position.copy(p);
+          camera.quaternion.copy(r);
+          camera.scale.set(1, 1, 1);
+          camera.updateMatrixWorld(true);
+          state.mscale = `${MODEL_SCALE} (cam lifted out)`;
+        }
+
+        window.__scene = scene;   // debug handles
+        window.__T = THREE;
+
+        // ?flat=1 — unlit albedo only, no lighting at all. The apples-to-apples
+        // comparison against Blender's Material preview.
+        if (q.get('flat') === '1') {
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            const swap = (m) => new THREE.MeshBasicMaterial({
+              map: m.map || null,
+              color: m.map ? 0xffffff : 0xb0aca4,
+              side: m.side, transparent: m.transparent,
+              alphaTest: m.alphaTest, depthWrite: m.depthWrite
+            });
+            o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+          });
+          renderer.toneMapping = THREE.NoToneMapping;
+        }
+
+        // Shadows. Everything casts and receives except the openings — see NOCAST_RE.
+        // This is the difference between a lit room and the near-black one this scene
+        // rendered before.
+        let noCast = 0;
+        gltf.scene.traverse((o) => {
+          if (!o.isMesh) return;
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          const blocks = mats.some((m) => NOCAST_RE.test(m?.name || ''));
+          o.castShadow = !blocks;
+          o.receiveShadow = true;
+          if (blocks) noCast++;
+        });
+        state.noCast = noCast;
+
+        // ── measure, then aim ───────────────────────────────────────────────
+        buildingBox = new THREE.Box3().setFromObject(gltf.scene);
+        apertures = measureApertures(gltf.scene);
+        aimSun();
+        aimSkyShadow();
+        PCSS.setSunAngle(RT_SUNANG);
+
+        apertures.roof.forEach((ap, i) => {
+          const l = skylights[i];
+          if (!l) return;
+          l.visible = true;
+          l.intensity = RT_SKYL;
+          // ★ SIZE AND AIM FROM THE PANE'S OWN PLANE, NEVER ITS BOUNDING BOX — this is n017,
+          // "the light seems to start too low, very abrupt line where the shafts originate".
+          // A RectAreaLight is single-sided: everything behind its plane gets exactly zero.
+          // Placed at the pane's box centre and aimed straight down, that plane was the
+          // HORIZONTAL y = 5.59, which is 1.6 m below the top of a pane that spans 3.98 to
+          // 7.19 m. So the whole upper roof went unlit by the skylights, and the pitched roof
+          // crossing y = 5.59 drew a dead straight line across beams, glass and brickwork.
+          // Measured: the line sat where the skylights' contribution went 0 -> 238.
+          // The box was also the wrong size — height took ap.size.z, the 2.07 m HORIZONTAL
+          // projection of a 3.82 m sloped sheet, so the source under-covered the opening.
+          // With the real plane the cut-off lands on the glazing itself, where it belongs:
+          // the room is below it and lit, the sky above it was never the skylight's to light.
+          l.width = ap.plane.uSize; l.height = ap.plane.vSize;
+          l.position.copy(ap.centre);
+          // Aim one metre down the pane's inward normal, not at the floor centroid, so a
+          // skylight over the far bay lights the far bay.
+          l.lookAt(ap.centre.x + ap.plane.normal.x,
+                   ap.centre.y + ap.plane.normal.y,
+                   ap.centre.z + ap.plane.normal.z);
+        });
+
+        // The march reads the sun's shadow map, so it cannot start until the sun is aimed.
+        // Reach is the building's diagonal — marching further just costs samples on air
+        // that is outside the room anyway.
+        volPass.setLight(sun);
+        volPass.uniforms.uMaxDist.value =
+          buildingBox.getSize(new THREE.Vector3()).length();
+
+        // ── GI ──────────────────────────────────────────────────────────────
+        // Cover the building, plus half a probe spacing so surfaces on the outer walls
+        // still have a probe on the far side to interpolate toward.
+        const giBounds = buildingBox.clone().expandByScalar(GI_SPACING * 0.5);
+        gi = createGIVolume({
+          renderer, scene, bounds: giBounds,
+          spacing: GI_SPACING, cubeSize: GI_CUBE,
+        });
+
+        if (gi) {
+          for (const m of litMaterials) { gi.patch(m); PCSS.patch(m); }
+          gi.setIntensity(0);        // stays dark until there is something in the volume
+          gi.setNormalBias(RT_GIBIAS);
+          gi.setBackWeight(RT_GIVIS);
+          gi.setValidThreshold(RT_GIVALID);
+        } else {
+          for (const m of litMaterials) PCSS.patch(m);
+        }
+
+        if (RT_CAT) loadCat(gltf.scene, writeHud);
+
+        // Baked and real-time are mutually exclusive by default: the lightmap already
+        // contains the bounce the rig is reproducing.
+        function applyLightingMode(mode) {
+          const useBaked = mode === 'baked' || mode === 'both';
+          const useRT = mode === 'rt' || mode === 'both';
+          gltf.scene.traverse((o) => {
+            if (!o.isMesh) return;
+            for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
+              if (!m || !m.userData) continue;
+              const baked = m.userData.bakedLightMap;
+              if (baked === undefined) continue;
+              const want = useBaked ? baked : null;
+              if (m.lightMap !== want) { m.lightMap = want; m.needsUpdate = true; }
+              m.lightMapIntensity = useBaked ? LM_INTENSITY : 0;
+            }
+          });
+          setRigEnabled(useRT);
+          hud.textContent = hud.textContent.replace(/\nlighting .*/, '') + `\nlighting ${mode}`;
+        }
+        applyLightingMode(RT_MODE);
+
+        if (camera.parent && camera.parent !== scene) {
+          scene.attach(camera);
+        }
+        if (q.get('nocontrols') !== '1') {
+          // Point the orbit target down the camera's OWN forward axis, so the opening
+          // frame is exactly the Blender camera rather than being yanked to the origin.
+          // ★ The read must happen BEFORE the constructor: new OrbitControls() calls
+          // update(), which lookAt()s the DEFAULT target (the origin) — reading
+          // getWorldDirection afterwards captures the yanked aim, which is exactly
+          // the bug this comment thought it was preventing.
+          const fwd = new THREE.Vector3();
+          camera.getWorldDirection(fwd);
+          const eye = camera.getWorldPosition(new THREE.Vector3());
+          controls = new OrbitControls(camera, renderer.domElement);
+          controls.enableDamping = true;
+          controls.target.copy(eye).add(fwd.multiplyScalar(12));
+          controls.update();
+          fly = createFlyCam({ camera, controls });
+          window.__fly = fly;
+        }
+
+        function writeHud(extra = '') {
+          hud.textContent =
+            `meshes ${state.meshes}  lightmapped ${state.withLM}  tris ${Math.round(state.tris).toLocaleString()}\n` +
+            `camera ${state.cam}  exposure ${EXPOSURE}\n` +
+            `apertures ${apertures.panes.length} (${apertures.roof.length} roof)  non-casters ${state.noCast}\n` +
+            `gi ${state.gi}\n` +
+            (state.cat ? `cat ${state.cat}\n` : '') +
+            (fly ? fly.hint : '') + extra;
+        }
+        writeHud();
+
+        // ── bake the volume ─────────────────────────────────────────────────
+        async function runBake() {
+          if (!gi) { state.gi = 'unavailable'; writeHud(); return; }
+          bakeUI.style.display = 'block';
+          const t0 = performance.now();
+          const r = await gi.bake({
+            bounces: GI_BOUNCES,
+            // Additive fakes are not light. Integrating a light shaft into the probes
+            // would feed its own glow back in as bounce and run away over passes.
+            //
+            // ★ AND THE CAT MUST BE OUT OF IT, FOR BOTH REASONS AT ONCE. Correctness: a
+            // probe records the light in a piece of AIR, so baking a cat who is about to
+            // walk somewhere else leaves his silhouette in the room's bounce forever, and
+            // the volume is what LIGHTS him — bake him in and he shades himself. Speed: a
+            // bake is 924 probes x 6 faces = 5,544 renders, and a 51-bone skinned mesh with
+            // frustumCulled off is skinned in every one of them. Measured 123 s with him in.
+            exclude: [catRoot].filter(Boolean),
+            onProgress: ({ done, total, bounce, bounces }) => {
+              bakeTxt.textContent = `baking light — bounce ${bounce}/${bounces}`;
+              bakeBar.style.width = `${(100 * (bounce - 1 + done / total) / bounces).toFixed(1)}%`;
+            },
+          });
+          bakeUI.style.display = 'none';
+          gi.setIntensity(rig.visible ? RT_GI : 0);
+          state.gi = `${gi.dims.x}x${gi.dims.y}x${gi.dims.z} (${r.probes}) ${r.ms}ms`;
+          writeHud();
+          console.log('[gi] baked', r, 'in', Math.round(performance.now() - t0), 'ms');
+        }
+
+        // A published loop must not spend eight seconds baking on every visit. Ship the
+        // volume next to the .glb; ?gibake=1 forces a fresh one while art-directing.
+        async function loadOrBake() {
+          if (!GI_FORCE && gi) {
+            try {
+              // ★ NOT gi_volume.bin — that one was baked against the FULL-SIZE building and
+              // its probe bounds are 1/0.6 too big. It would load without complaint and
+              // light this room from probes that are metres outside it. Its own filename,
+              // which does not exist yet, so this falls through to a fresh bake (~9 s).
+              const res = await fetch(bust('../../assets/factory/gi_volume_60.bin'));
+              if (res.ok && gi.load(await res.arrayBuffer())) {
+                gi.setIntensity(rig.visible ? RT_GI : 0);
+                state.gi = `cached ${gi.dims.x}x${gi.dims.y}x${gi.dims.z}`;
+                writeHud();
+                return;
+              }
+            } catch { /* no cache yet — bake */ }
+          }
+          await runBake();
+        }
+        await loadOrBake();
+
+        window.__rt = {
+          applyLightingMode, rig, sun, skylights, bounce, setRigEnabled,
+          gi, apertures, buildingBox, runBake, setSunAngles, volPass,
+          // Getters, because the cat loads after this object is built. Exposed for the
+          // same reason everything else here is: a scripted check cannot drive an
+          // AnimationMixer that only ever ticks inside requestAnimationFrame, and rAF
+          // does not run in a tab that is not compositing.
+          get catMixer() { return catMixer; },
+          get cat() { return catRoot; },
+          get catWalk() { return catWalk; },
+          // Flip between the two shaft implementations from the console, for A/B. Must set
+          // volMode as well as the visibility, or the Volumetrics toggle's proxies read a
+          // stale mode and hand you the wrong one back when you switch it on again.
+          setShafts: (m) => {
+            volMode = m;
+            volPass.enabled = m === 'ray';
+          },
+          // Dump the baked volume so it can be saved next to the .glb.
+          saveGI: () => {
+            const blob = new Blob([gi.serialise()], { type: 'application/octet-stream' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'gi_volume.bin';
+            a.click();
+          },
+        };
+
+        if (FEEDBACK) {
+          import('../../tools/feedback.js').then(({ initFeedback }) => {
+            // 'factory-60', NOT 'factory-rt'. This file is a copy of that loop and the
+            // name came with it — left alone, every note filed here would claim to be
+            // against the full-size room while its deep link opened this one, which is
+            // exactly the mislabelling that bit us before. The key also namespaces the
+            // stored edits, so a drag at 60% must not reappear in the full-size loop.
+            initFeedback({ scene, camera, renderer, controls,
+                           pickRoot: gltf.scene, loop: 'factory-60' });
+          });
+        }
+      }, undefined, (e) => { hud.textContent = 'GLB FAILED: ' + e; });
+    }, undefined, (e) => { hud.textContent = 'HDR FAILED: ' + e; });
+
+    // ── the cat ───────────────────────────────────────────────────────────────
+    // Called once the GI volume exists, because the whole point is that he samples it.
+    let catMixer = null, catRoot = null, catWalk = null;
+    function loadCat(building, writeHud) {
+      const gl = new GLTFLoader();
+      const load = (url) => new Promise((res, rej) => gl.load(bust(url), res, undefined, rej));
+
+      Promise.all([
+        load('../../assets/cat/cat.glb'),
+        load(`../../assets/cat/anim_${CAT_CLIP}.glb`),
+        CAT_WALK ? load('../../assets/cat/anim_walk.glb') : Promise.resolve(null),
+      ]).then(([cat, anim, walkGlb]) => {
+        const model = cat.scene;
+        let mat = null;
+        model.traverse((o) => {
+          if (!o.isMesh) return;
+          o.castShadow = true;
+          o.receiveShadow = true;
+          // A skinned mesh's bounds are computed from the BIND pose and do not follow the
+          // bones, so three culls him at camera angles where he is plainly on screen.
+          o.frustumCulled = false;
+          if (o.isSkinnedMesh && !mat) mat = o.material;
+        });
+        // Where he is standing is an output of the scene, not something an artist placed,
+        // so the feedback panel keeps him selectable but takes the drag handles away.
+        model.userData.noMove = true;
+        catRoot = model;
+
+        // Base colour is stripped from the .glb — one source of truth, and it stops the
+        // export pinning the default coat. So the material arrives with NO map at all.
+        new THREE.TextureLoader().load(bust(`../../assets/cat/fur/${CAT_FUR}.jpg`), (t) => {
+          // flipY false because these sample glTF UVs (top-left origin). GLTFLoader sets
+          // it for textures inside a .glb; one loaded separately does not get it and the
+          // fur comes out mirrored. sRGB or he renders pale and washed out.
+          t.flipY = false;
+          t.colorSpace = THREE.SRGBColorSpace;
+          t.anisotropy = MAX_ANISOTROPY;
+          if (!mat) return;
+          mat.map?.dispose();
+          mat.map = t;
+          mat.needsUpdate = true;
+        });
+
+        // ★ THIS IS THE POINT OF HIM BEING HERE. The building is lit by the same two
+        // patches, and they are what an irradiance volume can do that a lightmap cannot:
+        // the light is stored in the AIR, so anything standing in it can sample it. The
+        // GI vertex patch runs after <project_vertex>, which is why it reads the SKINNED
+        // position rather than lighting the bind pose.
+        if (mat) { if (gi) gi.patch(mat); PCSS.patch(mat); }
+
+        // Drop him onto the floor rather than trusting a typed height.
+        const [cx, cz] = CAT_POS;
+        const down = new THREE.Raycaster(new THREE.Vector3(cx, 40, cz), new THREE.Vector3(0, -1, 0));
+        const hit = down.intersectObject(building, true)
+          .find((h) => h.face && h.face.normal.y > 0.5);
+        model.position.set(cx, hit ? hit.point.y : buildingBox.min.y, cz);
+        model.rotation.y = THREE.MathUtils.degToRad(CAT_YAW);
+        scene.add(model);
+
+        const clip = anim.animations[0];
+        catMixer = new THREE.AnimationMixer(model);
+        const actions = {};
+        if (clip) { clip.name = CAT_CLIP; actions[CAT_CLIP] = catMixer.clipAction(clip); }
+        const walkClip = walkGlb?.animations?.[0];
+        if (walkClip) { walkClip.name = 'walk'; actions.walk = catMixer.clipAction(walkClip); }
+
+        // Crossfade rather than cut — a hard swap makes every clip look broken on its
+        // first frame. Tracked so the same clip is not restarted every frame.
+        let playing = null;
+        function play(name, rate = 1, fade = 0.25) {
+          const a = actions[name];
+          if (!a) return;
+          if (playing !== name) {
+            const prev = actions[playing];
+            a.reset().setEffectiveWeight(1).play();
+            if (prev) prev.crossFadeTo(a, fade, false);
+            playing = name;
+          }
+          a.setEffectiveTimeScale(rate);
+        }
+        play(walkClip && CAT_WALK ? 'walk' : CAT_CLIP, 1, 0);
+
+        const b = new THREE.Box3().setFromObject(model);
+        const s = b.getSize(new THREE.Vector3());
+        // Unreal is centimetres and glTF metres. If export_uniform_scale was wrong this
+        // reads ~45 or ~0.005 rather than a cat, so it is worth printing.
+        state.cat = `${CAT_FUR} ${s.x.toFixed(2)}x${s.y.toFixed(2)}x${s.z.toFixed(2)}m`;
+
+        // ── walking ─────────────────────────────────────────────────────────
+        // Built last, because it measures the room off `building` and needs him already
+        // placed. It takes over his matrix from here — see matrixAutoUpdate in cat-walk.js.
+        if (CAT_WALK && walkClip) {
+          // Measure before the walk starts — it drives the mixer by hand and parks the body
+          // at the origin to do it, so it cannot run once steering owns his matrix.
+          const measured = measureAuthoredSpeed({ model, mixer: catMixer, action: actions.walk });
+          const catStride = parseFloat(q.get('catstride') ?? '') || measured || CAT_SPEED;
+          catWalk = createCatWalk({
+            model, building, floorY: model.position.y,
+            speed: CAT_SPEED, turnRadius: CAT_TURN, stride: catStride,
+            onClip: (name, rate) => play(name, rate),
+          });
+          const g = catWalk.stats();
+          state.cat += `  walk ${CAT_SPEED}m/s r${CAT_TURN} stride ${catStride.toFixed(3)}`
+                    + `  grid ${g.reachable} walkable of ${g.cells}`;
+        } else {
+          state.cat += `  ${CAT_CLIP}` + (clip ? '' : ' NO CLIP');
+        }
+        writeHud();
+      }).catch((e) => { state.cat = 'failed: ' + e; writeHud(); });
+    }
+
+    const clock = new THREE.Clock();
+    // getElapsedTime() consumes the delta internally, so getDelta() here returns ~0.
+    let prevT = 0;
+    renderer.setAnimationLoop(() => {
+      const t = clock.getElapsedTime();
+      const dt = t - prevT; prevT = t;
+      if (fly) fly.update(dt);
+      // Steering BEFORE the mixer: the walk sets the clip rate for this frame.
+      if (catWalk) catWalk.update(dt);
+      if (catMixer) catMixer.update(dt);
+
+      if (controls) controls.update();
+
+      // Depth of the solid world. The raymarch walks each pixel's ray out to this, so it
+      // has to be rendered BEFORE the main pass. Nothing needs hiding any more — the
+      // atmosphere is a post pass now and never writes depth.
+      if (volPass.enabled) {
+        const prevTarget = renderer.getRenderTarget();
+        renderer.setRenderTarget(depthRT);
+        renderer.clear();
+        renderer.render(scene, camera);
+        renderer.setRenderTarget(prevTarget);
+      }
+
+      looks.render(t);
+    });
+
+    addEventListener('resize', () => {
+      applyFov();
+      renderer.setSize(innerWidth, innerHeight);
+      looks.setSize(innerWidth, innerHeight);
+      if (aoPass) aoPass.setSize(innerWidth, innerHeight);
+      // The depth texture is sampled by screen position, so it has to track the canvas or
+      // the shafts fade against last frame's geometry, offset.
+      const dpr = renderer.getPixelRatio();
+      depthRT.setSize(innerWidth * dpr, innerHeight * dpr);
+    });
+  </script>
+</body>
+</html>
