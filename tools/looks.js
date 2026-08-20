@@ -856,7 +856,11 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
     #looks .row { display:flex; align-items:center; gap:8px; min-height: 24px; }
     #looks .row > .k { flex: 0 0 88px; color:#8b93a7; font-size:11px; }
     #looks .row > .c { flex: 1; display:flex; align-items:center; gap:6px; min-width: 0; }
-    #looks .row .v { flex: 0 0 40px; text-align:right; color:#dfe3ea; font-size:11px; }
+    #looks .row .v { flex: 0 0 46px; text-align:right; color:#dfe3ea; font-size:11px;
+      background:#0e1116; border:1px solid #262c39; border-radius:4px; padding:2px 4px;
+      font-family: ui-monospace, Consolas, monospace; min-width:0; }
+    #looks .row .v:focus { outline:none; border-color:#3c76c4; }
+    #looks .row .v[readonly] { background:transparent; border-color:transparent; }
     #looks select { width:100%; min-width:0; background:#0e1116; color:#dfe3ea;
       border:1px solid #262c39; border-radius:5px; padding:3px 5px;
       font: 11.5px ui-monospace, Consolas, monospace; }
@@ -956,10 +960,30 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
       parent.appendChild(r);
       return r;
     };
-    const readout = (text) => {
-      const v = document.createElement('span');
+    // The readout is an INPUT, not a span — type an exact value, Enter/blur
+    // commits, Esc restores. The committer writes back through the SLIDER
+    // (set + dispatch), so clamping, curve mapping and the URL round-trip all
+    // go through the one pipeline the drag already uses; a typed value can
+    // never reach a place a dragged one couldn't. Sliders update the box via
+    // `.value` (it has no textContent). Without onCommit it is read-only.
+    const readout = (text, onCommit) => {
+      const v = document.createElement('input');
+      v.type = 'text';
       v.className = 'v';
-      v.textContent = text;
+      v.value = text;
+      v.setAttribute('inputmode', 'decimal');
+      if (!onCommit) { v.readOnly = true; v.tabIndex = -1; return v; }
+      let shown = text;   // what the slider last wrote — Esc and bad parses restore it
+      v.addEventListener('focus', () => { shown = v.value; v.select(); });
+      v.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') v.blur();
+        else if (e.key === 'Escape') { v.value = shown; v.blur(); }
+        e.stopPropagation();
+      });
+      v.addEventListener('change', () => {
+        const n = parseFloat(v.value);
+        if (Number.isFinite(n)) onCommit(n); else v.value = shown;
+      });
       return v;
     };
 
@@ -978,10 +1002,14 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
     const amtInput = document.createElement('input');
     amtInput.type = 'range'; amtInput.min = '0'; amtInput.max = '1'; amtInput.step = '0.01';
     amtInput.value = '1';
-    const amtV = readout('100%');
+    // typed values are PERCENT (the box reads "85%"), so 85 means 0.85
+    const amtV = readout('100%', (n) => {
+      amtInput.value = String(n / 100);
+      amtInput.dispatchEvent(new Event('input'));
+    });
     amtInput.addEventListener('input', () => {
       const v = parseFloat(amtInput.value);
-      amtV.textContent = Math.round(v * 100) + '%';
+      amtV.value = Math.round(v * 100) + '%';
       for (const pass of passes.values()) pass.uniforms.uAmount.value = v;
     });
     row(secStyle, 'Strength', amtInput, amtV);
@@ -1035,10 +1063,13 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
     const expInput = document.createElement('input');
     expInput.type = 'range'; expInput.min = '0.1'; expInput.max = '10'; expInput.step = '0.1';
     expInput.value = String(renderer.toneMappingExposure);
-    const expV = readout((+expInput.value).toFixed(1));
+    const expV = readout((+expInput.value).toFixed(1), (n) => {
+      expInput.value = String(n);   // the range input clamps to 0.1..10
+      expInput.dispatchEvent(new Event('input'));
+    });
     expInput.addEventListener('input', () => {
       renderer.toneMappingExposure = parseFloat(expInput.value);
-      expV.textContent = (+expInput.value).toFixed(1);
+      expV.value = (+expInput.value).toFixed(1);
     });
     row(secOf[exposure?.group] || secImage, exposure?.label ?? 'Exposure', expInput, expV);
     controls.push({ key: 'exp', get: () => expInput.value,
@@ -1084,10 +1115,17 @@ export function createLooks({ renderer, scene, camera, getCamera, initial = 'ori
         input.step = String(d.step ?? (d.max - d.min) / 500);
         input.value = String(d.value);
       }
-      const vOut = readout(fmt(d.value));
+      // A typed value arrives in REAL units and is clamped to the dial's range
+      // before the curve inverse — Math.pow of a negative with a fractional
+      // exponent is NaN, so an out-of-range entry would otherwise kill the dial.
+      const vOut = readout(fmt(d.value), (n) => {
+        const c = Math.min(d.max, Math.max(d.min, n));
+        input.value = String(curve ? toSlider(c) : c);
+        input.dispatchEvent(new Event('input'));
+      });
       input.addEventListener('input', () => {
         const val = curve ? toValue(parseFloat(input.value)) : parseFloat(input.value);
-        vOut.textContent = fmt(val);
+        vOut.value = fmt(val);
         d.onInput(val);
       });
       row(sectionFor(d), d.label, input, vOut);

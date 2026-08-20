@@ -1,675 +1,481 @@
 [
   {
-    "id": "n002",
+    "id": "n025",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-15T01:02:52.751Z",
-    "object": "wall_standard_standard_01005",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T06:59:42.347Z",
+    "object": "Prop_Old_Tv_02002_2",
     "objects": [
-      "wall_standard_standard_01005"
+      "Prop_Old_Tv_02002_2"
     ],
-    "material": "modular_factory_facade_brick",
+    "material": "Screen_Glow",
     "point_blender": [
-      3.442,
-      -0.663,
-      -2.025
+      1.549,
+      -1.463,
+      0.435
     ],
     "edits": [],
-    "comment": "Hey Claude, this is just a test we'll tackle the lightmap stuff later but this is the wall texture that has some weird highlights on it. Probably happened during the bake.",
+    "comment": "Screen glow is casting green light behind the TV on to the wall. Make sure the green light can only project forward.",
     "camera": {
       "position": [
-        -10.164,
-        -0.068,
-        4.075
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 38.37,
-      "aspect": 1.7962,
+      "fov": 51.7,
+      "aspect": 1.548,
       "target": [
-        1.52,
-        -0.826,
-        2.722
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-10.164%2C-0.068%2C4.075&tgt=1.52%2C-0.826%2C2.722&sel=wall_standard_standard_01005&review=1",
-    "shot": "shots/n002.jpg",
-    "resolution": "Superseded, not fixed. This is a lightmap artefact and was filed against the baked loop (loops/factory/), which is unchanged. The real-time loop does not use the lightmap at all, so the highlight cannot occur there. Reopen against loops/factory/ if the baked scene is still shipping. UPDATE 2026-08-17: loops/factory/ has since been deleted, so there is nothing to reopen against \u00e2\u20ac\u201d reproduce the baked scene with loops/factory-rt/index.html?mode=baked, which loads the same lightmap_4k.hdr.",
-    "updated": "2026-08-17T04:26:21.645Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&sel=Prop_Old_Tv_02002_2&review=1",
+    "shot": "shots/n025.jpg",
+    "resolution": "Fixed: the GI bake overdrove the screens 8x and the coarse probe grid wrapped that green onto the wall BEHIND the TVs. Bake boost is 4 now (display brightness unchanged) and gi_volume.bin is re-baked — the glow pools forward onto the desk and the brick behind reads as brick.",
+    "updated": "2026-08-19T07:19:50.395Z"
   },
   {
-    "id": "n003",
+    "id": "n026",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T15:22:16.314Z",
-    "object": "wall_standard_standard_01011",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T07:00:30.356Z",
+    "object": "Prop_New_York_Caged_Subway_Clock001_2",
     "objects": [
-      "wall_standard_standard_01011"
+      "Prop_New_York_Caged_Subway_Clock001_2"
     ],
-    "material": "modular_factory_facade_brick",
+    "material": "nyclock - glas",
     "point_blender": [
-      -4.832,
-      3.944,
-      -1.391
+      0.5,
+      2.272,
+      2.071
     ],
     "edits": [],
-    "comment": "white glow around wall and door. Could be uv islands bleading in to each other?",
+    "comment": "the glass material and clock fast are not rendering here.",
     "camera": {
       "position": [
-        -8.6,
-        0.691,
-        7.837
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 38.37,
-      "aspect": 1.7962,
+      "fov": 51.7,
+      "aspect": 1.548,
       "target": [
-        -5.555,
-        -0.13,
-        2.907
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-8.6%2C0.691%2C7.837&tgt=-5.555%2C-0.13%2C2.907&sel=wall_standard_standard_01011&review=1",
-    "shot": "shots/n003.jpg",
-    "resolution": "Superseded, not fixed. Same as n002 \u00e2\u20ac\u201d filed against the baked loop. The cause is known and documented: the bake margin was larger than half the pack gap (16px margin, 8px gap), so neighbouring UV islands flooded into each other, which is exactly the white outline described. Real-time does not use the lightmap.",
-    "updated": "2026-08-17T04:26:21.722Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&sel=Prop_New_York_Caged_Subway_Clock001_2&review=1",
+    "shot": "shots/n026.jpg",
+    "resolution": "Fixed: the clock glass lost its transmission on export and arrived as an OPAQUE metalness-1 disc hiding the face and hands. Two causes: the pack names glass in Dutch (glas), which slipped past the /glass/ regex — now /glas/ matches both — and prop glass gets rebuilt as the house glass (transparent 0.18, depthWrite off, no shadow cast). Face, hands and cage all render now.",
+    "updated": "2026-08-19T07:19:50.402Z"
   },
   {
-    "id": "n004",
+    "id": "n030",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T15:24:14.302Z",
-    "object": "Cube001",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T07:21:35.535Z",
+    "object": "Prop_Persian_Carpet_1",
     "objects": [
-      "Cube001"
+      "Prop_Persian_Carpet_1"
     ],
-    "material": "modular_factory_facade_brick_doors",
+    "material": "carpet.001",
     "point_blender": [
-      -5.777,
-      4.052,
-      -1.562
+      -2.114,
+      0.55,
+      0.022
     ],
     "edits": [],
-    "comment": "Can we bake high resolution texture for some specific elements? Like this door with is very splotchy.",
+    "comment": "lets try including the carpet in the floor AO.",
     "camera": {
       "position": [
-        -12.478,
-        -1,
-        3.243
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 38.37,
-      "aspect": 1.7962,
+      "fov": 64.15,
+      "aspect": 1.1969,
       "target": [
-        -7.044,
-        -1.03,
-        1.071
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.478%2C-1%2C3.243&tgt=-7.044%2C-1.03%2C1.071&sel=Cube001&review=1",
-    "shot": "shots/n004.jpg",
-    "resolution": "Won't do for now \u00e2\u20ac\u201d a request to bake a higher-resolution texture for the door, not a defect. Closed by decision, not by a change. The door shares a 4096 atlas with the rest of the facade, so raising it means giving this object its own texture rather than turning a dial.",
-    "updated": "2026-08-17T04:27:45.241Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343,1.742,-0.052&tgt=4.628,1.637,0.707&looks=0",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&looks=0&sel=Prop_Persian_Carpet_1&review=1",
+    "shot": "shots/n030.jpg",
+    "resolution": "Done: rugs and carpets stay off the prop layer now, so their pixels fall through to the up-facing test and answer to the Contact floor dial. Verified by isolation (floor 2, walls+props 0): the Persian carpet pools AO around the crates on it.",
+    "updated": "2026-08-19T07:36:49.283Z"
   },
   {
-    "id": "n005",
+    "id": "n031",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T15:25:37.569Z",
-    "object": "Rack_1001",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T07:22:45.353Z",
+    "object": "SM_DPW_Ground_001002",
     "objects": [
-      "Rack_1001"
+      "SM_DPW_Ground_001002"
     ],
-    "material": "PBS_rack_1_mat",
+    "material": "Old wooden floor_60",
     "point_blender": [
-      -5.792,
-      -6.242,
-      -1.922
+      -0.868,
+      -0.815,
+      0.012
     ],
     "edits": [],
-    "comment": "we can lose the heavy ping and bake the shelves way down.",
+    "comment": "the soften slider doesn't seem to affect the shadows in the scene.",
     "camera": {
       "position": [
-        -11.641,
-        0.353,
-        -2.648
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 38.37,
-      "aspect": 1.7962,
+      "fov": 64.15,
+      "aspect": 1.1969,
       "target": [
-        -7.139,
-        -1.011,
-        0.833
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-11.641%2C0.353%2C-2.648&tgt=-7.139%2C-1.011%2C0.833&sel=Rack_1001&review=1",
-    "shot": "shots/n005.jpg",
-    "resolution": "Won't do for now \u00e2\u20ac\u201d a request to cut the rack's geometry and texture budget, not a defect. Closed by decision, not by a change. Nothing has been optimised; the rack still ships as exported.",
-    "updated": "2026-08-17T04:27:45.318Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343,1.742,-0.052&tgt=4.628,1.637,0.707&looks=0",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&looks=0&sel=SM_DPW_Ground_001002&review=1",
+    "shot": "shots/n031.jpg",
+    "resolution": "Great catch — the slider was dead because PCSS was never INSTALLED in this loop (factory-rt calls PCSS.install(), the warehouse did not), so all shadows here have been plain hard PCF since the loop was born and the dial talked to a shader branch that did not exist. install() runs at boot now and aimSun() feeds the shadow-frustum uniforms. Verified live: 0.004 = razor bars, 0.15 = melted wash, changing in real time. Note the whole scene reads slightly softer at the 0.075 default now that the feature actually exists.",
+    "updated": "2026-08-19T07:36:49.289Z"
   },
   {
-    "id": "n006",
+    "id": "n032",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T15:32:50.925Z",
-    "object": "Raidiator_01",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T07:23:54.107Z",
+    "object": "Prop_Old_Jars_Set_1",
     "objects": [
-      "Raidiator_01"
+      "Prop_Old_Jars_Set_1"
     ],
-    "material": "Rust metal",
+    "material": "Material.014",
     "point_blender": [
-      -12.985,
-      -8.042,
-      -1.719
+      -0.785,
+      -2.629,
+      1.087
     ],
     "edits": [],
-    "comment": "textures are not rendering properly across the radiator pieces.",
+    "comment": "These jars are removed from blender and can be deleted here as well",
     "camera": {
       "position": [
-        -2.767,
-        0.334,
-        0.937
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 40.7,
-      "aspect": 1.685,
+      "fov": 64.15,
+      "aspect": 1.1969,
       "target": [
-        -10.022,
-        -2.261,
-        10.137
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-2.767%2C0.334%2C0.937&tgt=-10.022%2C-2.261%2C10.137&sel=Raidiator_01&review=1",
-    "shot": "shots/n006.jpg",
-    "resolution": "Fixed: same cause as n014 \u00e2\u20ac\u201d shadow acne under PCSS, which shows as rainbow banding on fine geometry rather than stripes. Cleared by the shadow bias work (2mm depth bias, 6mm normalBias).",
-    "updated": "2026-08-17T04:26:10.945Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343,1.742,-0.052&tgt=4.628,1.637,0.707&looks=0",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&looks=0&sel=Prop_Old_Jars_Set_1&review=1",
+    "shot": "shots/n032.jpg",
+    "resolution": "Synced: props.glb re-exported without the jars set (63 props), GI re-baked. The lone Prop_Jar_Lid still ships — delete it in Blender too if it was part of the set.",
+    "updated": "2026-08-19T07:36:49.296Z"
   },
   {
-    "id": "n007",
+    "id": "n033",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T15:33:26.821Z",
-    "object": "Cube169_1",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:38:02.163Z",
+    "object": "Column024",
     "objects": [
-      "Cube169_1"
+      "Column024"
     ],
-    "material": "modular_factory_facade_windows_glass",
+    "material": "M_Concrete_Columns",
     "point_blender": [
-      -9.369,
-      -13.826,
-      -0.609
+      1.939,
+      2.315,
+      2.02
     ],
     "edits": [],
-    "comment": "Widow trim color (green) not displaying",
+    "comment": "Include all columns in the Bounce Walls dial.",
     "camera": {
       "position": [
-        -7.683,
-        0.746,
-        -2.226
+        -5.13,
+        1.404,
+        0.026
       ],
-      "fov": 40.7,
-      "aspect": 1.685,
+      "fov": 45.45,
+      "aspect": 1.7906,
       "target": [
-        -11.861,
-        -2.022,
-        8.677
+        4.856,
+        1.299,
+        -0.497
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-7.683%2C0.746%2C-2.226&tgt=-11.861%2C-2.022%2C8.677&sel=Cube169_1&review=1",
-    "shot": "shots/n007.jpg",
-    "resolution": "Fixed: same as n016 \u00e2\u20ac\u201d the green baseColorFactor (0.0575, 0.0857, 0.045) IS present in the current .glb, so the post-export patch was re-run. Verified by reading the material, not by eye.",
-    "updated": "2026-08-17T04:26:11.023Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/?v=tvstill",
+    "view": "http://localhost:5173/loops/dripping-pickle/?v=tvstill&cam=-5.13%2C1.404%2C0.026&tgt=4.856%2C1.299%2C-0.497&sel=Column024&review=1",
+    "shot": "shots/n033.jpg",
+    "resolution": "Done. The Bounce walls dial (per-material giGain, 0.45) now covers the columns (M_Concrete_Columns and the .001 ceilings), Wood_60, M_PittedRust_Beams and the modular_factory_facade_trim family, alongside the original brick/mural/plaster set — 10 materials reduced, floor and props untouched. gi_volume.bin re-baked at shipped defaults so the second bounce agrees.",
+    "updated": "2026-08-19T16:54:59.275Z"
   },
   {
-    "id": "n008",
+    "id": "n034",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-16T16:04:00.067Z",
-    "object": "Column005",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:40:30.441Z",
+    "object": "SM_DPW_Concrete_013014",
     "objects": [
-      "Column005"
+      "SM_DPW_Concrete_013014"
     ],
-    "material": "modular_factory_facade_trim_01",
+    "material": "Wood_60",
     "point_blender": [
-      -2.287,
-      -4.607,
-      0.558
+      1.983,
+      -2.39,
+      3.334
     ],
     "edits": [],
-    "comment": "The concrete columns are black now. Just a heads up.",
+    "comment": "Add of these to Bounce Walls",
     "camera": {
       "position": [
-        -12.387,
-        -0.506,
-        1.392
+        -5.13,
+        1.404,
+        0.026
       ],
-      "fov": 40.7,
-      "aspect": 1.685,
+      "fov": 45.52,
+      "aspect": 1.7906,
       "target": [
-        3.927,
-        -1.076,
-        1.429
+        4.857,
+        1.901,
+        0.184
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.387%2C-0.506%2C1.392&tgt=3.927%2C-1.076%2C1.429&sel=Column005&review=1",
-    "shot": "shots/n008.jpg",
-    "resolution": "Not a bug \u00e2\u20ac\u201d measured. modular_factory_facade_trim_01 sampled at this object's own UVs reads 37,33,29 against a brick control of 132,97,76, so it is ~3.5x darker and displaying correctly. If these should read as concrete it is a material assignment in Blender; M_DPW_Concrete and 'Concrete used' both already exist in the file. Same finding as n009, which is still open.",
-    "updated": "2026-08-17T04:26:21.565Z",
-    "origin_loop": "factory (baked lightmap, loop removed 2026-08-17)"
+    "url": "http://localhost:5173/loops/dripping-pickle/?v=tvstill",
+    "view": "http://localhost:5173/loops/dripping-pickle/?v=tvstill&cam=-5.13%2C1.404%2C0.026&tgt=4.857%2C1.901%2C0.184&sel=SM_DPW_Concrete_013014&review=1",
+    "shot": "shots/n034.jpg",
+    "resolution": "Done. The Bounce walls dial (per-material giGain, 0.45) now covers the columns (M_Concrete_Columns and the .001 ceilings), Wood_60, M_PittedRust_Beams and the modular_factory_facade_trim family, alongside the original brick/mural/plaster set — 10 materials reduced, floor and props untouched. gi_volume.bin re-baked at shipped defaults so the second bounce agrees.",
+    "updated": "2026-08-19T16:54:59.275Z"
   },
   {
-    "id": "n010",
+    "id": "n035",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T03:12:06.416Z",
-    "object": "SM_DPW_Ground_001",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:40:53.287Z",
+    "object": "SM_DPW_Roof_001002",
     "objects": [
-      "SM_DPW_Ground_001"
+      "SM_DPW_Roof_001002"
     ],
-    "material": "Old wooden floor",
+    "material": "M_Concrete_Columns.001",
     "point_blender": [
-      -0.07,
-      1.363,
-      -2.284
+      0.361,
+      -2.024,
+      3.651
     ],
     "edits": [],
-    "comment": "The Sun is shining through the edges of the walls where they meet other objects.",
+    "comment": "Add both ceilings to Bounce walls",
     "camera": {
       "position": [
-        -12.488,
-        -0.888,
-        2.359
+        -5.13,
+        1.404,
+        0.026
       ],
-      "fov": 40.53,
-      "aspect": 1.6929,
+      "fov": 45.52,
+      "aspect": 1.7906,
       "target": [
-        2.72,
-        -2.184,
-        -3.432
+        4.857,
+        1.901,
+        0.184
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.488%2C-0.888%2C2.359&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
-    "shot": "shots/n010.jpg",
-    "resolution": "Fixed: shadow.bias was in normalised depth, so the 50m shadow box turned -0.0006 into 3cm of offset. Stored in metres now; normalBias 0.06 -> 0.006.",
-    "updated": "2026-08-17T04:24:08.658Z"
+    "url": "http://localhost:5173/loops/dripping-pickle/?v=tvstill",
+    "view": "http://localhost:5173/loops/dripping-pickle/?v=tvstill&cam=-5.13%2C1.404%2C0.026&tgt=4.857%2C1.901%2C0.184&sel=SM_DPW_Roof_001002&review=1",
+    "shot": "shots/n035.jpg",
+    "resolution": "Done. The Bounce walls dial (per-material giGain, 0.45) now covers the columns (M_Concrete_Columns and the .001 ceilings), Wood_60, M_PittedRust_Beams and the modular_factory_facade_trim family, alongside the original brick/mural/plaster set — 10 materials reduced, floor and props untouched. gi_volume.bin re-baked at shipped defaults so the second bounce agrees.",
+    "updated": "2026-08-19T16:54:59.275Z"
   },
   {
-    "id": "n011",
+    "id": "n036",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T03:13:21.401Z",
-    "object": "SM_DPW_Ground_001",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:41:15.790Z",
+    "object": "SM_DPW_MetalWhite_001002",
     "objects": [
-      "SM_DPW_Ground_001"
+      "SM_DPW_MetalWhite_001002"
     ],
-    "material": "Old wooden floor",
+    "material": "M_PittedRust_Beams",
     "point_blender": [
-      -5.494,
-      0.654,
-      -2.284
+      -0.094,
+      2.164,
+      2.819
     ],
     "edits": [],
-    "comment": "light shafts appear to be casting their shadow on the adjacent shaft",
+    "comment": "Add both large beams to Bounce walls",
     "camera": {
       "position": [
-        -12.258,
-        0.395,
-        2.527
+        -5.13,
+        1.404,
+        0.026
       ],
-      "fov": 40.53,
-      "aspect": 1.6929,
+      "fov": 45.52,
+      "aspect": 1.7906,
       "target": [
-        2.72,
-        -2.184,
-        -3.432
+        4.857,
+        1.901,
+        0.184
       ]
     },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.258%2C0.395%2C2.527&tgt=2.72%2C-2.184%2C-3.432&sel=SM_DPW_Ground_001&review=1",
-    "shot": "shots/n011.jpg",
-    "resolution": "Fixed with soft particles. The 'shadow' was the silhouette of the flat quad each beam is painted on \u00e2\u20ac\u201d sliced along a straight line wherever it passed through the floor. The opaque scene now renders into a depth texture first and each beam fades as it approaches whatever is behind it, so it behaves like a volume instead of a sheet. Plus a near-fade for walking into a beam, and a wider facing fade for beams slicing open air.",
-    "updated": "2026-08-17T04:47:39.059Z"
+    "url": "http://localhost:5173/loops/dripping-pickle/?v=tvstill",
+    "view": "http://localhost:5173/loops/dripping-pickle/?v=tvstill&cam=-5.13%2C1.404%2C0.026&tgt=4.857%2C1.901%2C0.184&sel=SM_DPW_MetalWhite_001002&review=1",
+    "shot": "shots/n036.jpg",
+    "resolution": "Done. The Bounce walls dial (per-material giGain, 0.45) now covers the columns (M_Concrete_Columns and the .001 ceilings), Wood_60, M_PittedRust_Beams and the modular_factory_facade_trim family, alongside the original brick/mural/plaster set — 10 materials reduced, floor and props untouched. gi_volume.bin re-baked at shipped defaults so the second bounce agrees.",
+    "updated": "2026-08-19T16:54:59.275Z"
   },
   {
-    "id": "n013",
+    "id": "n037",
     "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T03:18:48.320Z",
-    "object": "SM_DPW_WindowPanel_002002",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:41:52.956Z",
+    "object": "SM_DPW_Concrete_006002",
     "objects": [
-      "SM_DPW_WindowPanel_002002"
-    ],
-    "material": "M_DPW_DirtDecal",
-    "point_blender": [
-      -5.925,
-      -5.526,
-      4.868
-    ],
-    "edits": [],
-    "comment": "dirt / window texture is completely opaque.",
-    "camera": {
-      "position": [
-        -12.186,
-        1.939,
-        12.157
-      ],
-      "fov": 40.53,
-      "aspect": 1.6929,
-      "target": [
-        -7.457,
-        3.584,
-        5.438
-      ]
-    },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-12.186%2C1.939%2C12.157&tgt=-7.457%2C3.584%2C5.438&sel=SM_DPW_WindowPanel_002002&review=1",
-    "shot": "shots/n013.jpg",
-    "resolution": "Fixed: M_DPW_DirtDecal's alpha channel was being discarded (glTF alphaMode OPAQUE), so it rendered as a solid sheet. It is not a small decal \u00e2\u20ac\u201d it is the roof glazing over the whole far bay, so that bay was unlit. Decals now blend; aperture detection matches WindowPanel by name, taking the scene from 2 roof openings to 4.",
-    "updated": "2026-08-17T04:26:10.869Z"
-  },
-  {
-    "id": "n014",
-    "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T03:19:45.140Z",
-    "object": "Raidiator_02",
-    "objects": [
-      "Raidiator_02"
-    ],
-    "material": "Rust metal",
-    "point_blender": [
-      -12.976,
-      -1.248,
-      -1.745
-    ],
-    "edits": [],
-    "comment": "Radiators are fixed. Close it out!",
-    "camera": {
-      "position": [
-        -5.743,
-        -0.821,
-        1.005
-      ],
-      "fov": 40.53,
-      "aspect": 1.6929,
-      "target": [
-        -14,
-        -2.185,
-        0.577
-      ]
-    },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-5.743%2C-0.821%2C1.005&tgt=-14%2C-2.185%2C0.577&sel=Raidiator_02&review=1",
-    "shot": "shots/n014.jpg",
-    "resolution": "Confirmed fixed \u00e2\u20ac\u201d was shadow acne under PCSS; normalBias 0.02 -> 0.06.",
-    "updated": "2026-08-17T04:07:55.440Z"
-  },
-  {
-    "id": "n016",
-    "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T03:28:14.396Z",
-    "object": "cornice03_standard_standard_01003",
-    "objects": [
-      "cornice03_standard_standard_01003"
-    ],
-    "material": "modular_factory_facade_brick",
-    "point_blender": [
-      -13.387,
-      -12.205,
-      2.198
-    ],
-    "edits": [],
-    "comment": "green window texture is fixed and can be closed.",
-    "camera": {
-      "position": [
-        -7.322,
-        0.189,
-        3.524
-      ],
-      "fov": 40.53,
-      "aspect": 1.6929,
-      "target": [
-        -23.341,
-        -1.157,
-        11.815
-      ]
-    },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-7.322%2C0.189%2C3.524&tgt=-23.341%2C-1.157%2C11.815&sel=cornice03_standard_standard_01003&review=1",
-    "shot": "shots/n016.jpg",
-    "resolution": "Confirmed fixed \u00e2\u20ac\u201d baseColorFactor (0.0575, 0.0857, 0.045) is present in the current .glb.",
-    "updated": "2026-08-17T15:51:10.641Z"
-  },
-  {
-    "id": "n017",
-    "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T15:45:42.924Z",
-    "object": "SM_DPW_Concrete_005002",
-    "objects": [
-      "SM_DPW_Concrete_005002"
-    ],
-    "material": "Wood",
-    "point_blender": [
-      -2.211,
-      2.303,
-      5.775
-    ],
-    "edits": [],
-    "comment": "our new light source seems to be starting too low. Very abrupt line where the light shafts originate.",
-    "camera": {
-      "position": [
-        -6.43,
-        5.819,
-        -1.002
-      ],
-      "fov": 31.45,
-      "aspect": 2.2197,
-      "target": [
-        5.29,
-        4.159,
-        -2.969
-      ]
-    },
-    "url": "http://localhost:5173/loops/factory-rt/index.html?dev=1",
-    "view": "http://localhost:5173/loops/factory-rt/index.html?dev=1&cam=-6.43%2C5.819%2C-1.002&tgt=5.29%2C4.159%2C-2.969&sel=SM_DPW_Concrete_005002&review=1",
-    "shot": "shots/n017.jpg",
-    "resolution": "Rect lights were built from the pane BOUNDING BOX: placed at its centre (y=5.59), sized 10.36x2.07, aimed straight down. A RectAreaLight is single-sided, so that horizontal plane was a hard cut-off 1.6m below the top of an aperture spanning 3.98-7.19m. planeOf() now reads each pane\u00e2\u20ac\u2122s own plane (inward normal + in-plane extents) so the lights sit in the glazing at 10.36x3.82 and face down its real normal. Commit 6662fa8.",
-    "updated": "2026-08-17T17:05:07.582Z"
-  },
-  {
-    "id": "n018",
-    "status": "closed",
-    "loop": "factory-rt",
-    "at": "2026-08-17T17:12:38.692Z",
-    "object": "wall_standard_standard_01001",
-    "objects": [
-      "wall_standard_standard_01001"
-    ],
-    "material": "modular_factory_facade_brick",
-    "point_blender": [
-      3.582,
-      2.843,
-      -0.926
-    ],
-    "edits": [],
-    "comment": "All walls and the floor glow in the corners and get darker toward the middle. Basically the opposite of natural light. Let's find out why and fix it.",
-    "camera": {
-      "position": [
-        -11.716,
-        1.129,
-        5.197
-      ],
-      "fov": 31.92,
-      "aspect": 2.185,
-      "target": [
-        -1.927,
-        -0.47,
-        -1.557
-      ]
-    },
-    "url": "http://localhost:5173/loops/factory-rt/",
-    "view": "http://localhost:5173/loops/factory-rt/?cam=-11.716%2C1.129%2C5.197&tgt=-1.927%2C-0.47%2C-1.557&sel=wall_standard_standard_01001&review=1",
-    "shot": "shots/n018.jpg",
-    "resolution": "Two causes in the GI volume, both in tools/gi-volume.js. (1) The hardware trilinear fetch read the grid in the WRONG PLACE: a sampler maps u to texel index u*D-0.5, but probes sit at min+i*step with step=size/(D-1), so the right index is u*(D-1) \u00e2\u20ac\u201d they agree only at the centre probe, and the error reaches 1.1m toward the edges. (2) One texture() call cannot ask whether a probe can see the surface, so a wall near a corner took light from probes behind the perpendicular wall; it now gathers 8 with texelFetch and weights each by a wrapped cosine. Re-baked, because bounce pass 1 samples through this shader. giNormalBias 2.0 -> 0.33. GI alone, wall corner/mid and floor edge/mid: was 1.24/1.88, now 0.878/0.973 \u00e2\u20ac\u201d both below 1.0, so corners are darker than the middle. Costs nothing measurable. Commit 1f8d93d.",
-    "updated": "2026-08-17T17:33:07.699Z"
-  },
-  {
-    "id": "n021",
-    "status": "closed",
-    "loop": "warehouse",
-    "at": "2026-08-18T20:34:03.937Z",
-    "object": "Sign_DrippingPickle002",
-    "objects": [
-      "Sign_DrippingPickle002"
-    ],
-    "material": "M_Sign_DrippingPickle_60",
-    "point_blender": [
-      2.054,
-      -0.459,
-      2.918
-    ],
-    "edits": [],
-    "comment": "Let's dial in the worn / old paint look for the logo decal.",
-    "camera": {
-      "position": [
-        -7.584,
-        1.354,
-        0.551
-      ],
-      "fov": 32.27,
-      "aspect": 2.2236,
-      "target": [
-        2.4,
-        1.467,
-        -0.005
-      ]
-    },
-    "url": "http://localhost:5173/loops/warehouse/",
-    "view": "http://localhost:5173/loops/warehouse/?cam=-7.584%2C1.354%2C0.551&tgt=2.4%2C1.467%2C-0.005&sel=Sign_DrippingPickle002&review=1",
-    "shot": "shots/n021.jpg",
-    "resolution": "Fixed: the worn/old paint composite could never survive glTF export (one base-colour image per material), so the whole node graph \u2014 Paint Age, Fade Into Brick, Wear Blotches, Mortar Dropout, brick variation on world-locked wall coords \u2014 was baked down to one 2048 RGBA (DIFFUSE colour pass + alpha via a temporary Emission rewire, per the CLAUDE.md recipe). Lives at assets/warehouse/sign_dripping_pickle_baked.png and as the BAKED_EXPORT node in M_Sign_DrippingPickle_60; the original graph is parked in the material, not deleted \u2014 relink Mix.Result/SignOpacity to iterate, then re-bake.",
-    "updated": "2026-08-18T20:52:15.000Z"
-  },
-  {
-    "id": "n022",
-    "status": "closed",
-    "loop": "warehouse",
-    "at": "2026-08-18T20:35:20.906Z",
-    "object": "Column018",
-    "objects": [
-      "Column018"
+      "SM_DPW_Concrete_006002"
     ],
     "material": "modular_factory_facade_trim_01_60",
     "point_blender": [
-      -1.372,
-      -2.874,
-      1.036
+      0.863,
+      2.219,
+      3.548
     ],
     "edits": [],
-    "comment": "I forgot to apply the material to the other columns. As it is tho it's very dark so we'll have to find a fix in blender and re import it here.",
+    "comment": "Add this to Bounce walls",
     "camera": {
       "position": [
-        -7.584,
-        1.304,
-        0.551
+        -5.131,
+        1.404,
+        0.076
       ],
-      "fov": 32.27,
-      "aspect": 2.2236,
+      "fov": 45.52,
+      "aspect": 1.7906,
       "target": [
-        2.4,
-        1.467,
-        -0.005
+        4.857,
+        1.901,
+        0.184
       ]
     },
-    "url": "http://localhost:5173/loops/warehouse/",
-    "view": "http://localhost:5173/loops/warehouse/?cam=-7.584%2C1.304%2C0.551&tgt=2.4%2C1.467%2C-0.005&sel=Column018&review=1",
-    "shot": "shots/n022.jpg",
-    "resolution": "Fixed: all 8 columns (Column.017-024) carried modular_factory_facade_trim_01_60, which samples near-black at their UVs \u2014 the intended material had been applied to none of them. Applied 'Concrete used' (the room's concrete, a full 2K set: base/normal/roughness in the ConcreteUsed01_2K group, which the exporter translates completely). Verified in the re-export: columns read as concrete in the browser.",
-    "updated": "2026-08-18T20:52:15.000Z"
+    "url": "http://localhost:5173/loops/dripping-pickle/?v=tvstill",
+    "view": "http://localhost:5173/loops/dripping-pickle/?v=tvstill&cam=-5.131%2C1.404%2C0.076&tgt=4.857%2C1.901%2C0.184&sel=SM_DPW_Concrete_006002&review=1",
+    "shot": "shots/n037.jpg",
+    "resolution": "Done. The Bounce walls dial (per-material giGain, 0.45) now covers the columns (M_Concrete_Columns and the .001 ceilings), Wood_60, M_PittedRust_Beams and the modular_factory_facade_trim family, alongside the original brick/mural/plaster set — 10 materials reduced, floor and props untouched. gi_volume.bin re-baked at shipped defaults so the second bounce agrees.",
+    "updated": "2026-08-19T16:54:59.275Z"
   },
   {
-    "id": "n023",
+    "id": "n038",
     "status": "closed",
-    "loop": "warehouse",
-    "at": "2026-08-18T20:37:01.166Z",
-    "object": "SM_DPW_MetalWhite_017002",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T16:57:45.948Z",
+    "object": "Prop_Slavic_Tv001_1",
     "objects": [
-      "SM_DPW_MetalWhite_017002"
+      "Prop_Slavic_Tv001_1"
     ],
-    "material": "Edge Wear Dull Green",
+    "material": "Screen_Glow",
     "point_blender": [
-      -1.785,
-      -2.908,
-      2.719
+      1.504,
+      -1.672,
+      1.114
     ],
     "edits": [],
-    "comment": "this should match the other header beam on the adjacent wall. Probably me not copying it over in blender.",
+    "comment": "Try the video on this screen.",
     "camera": {
       "position": [
-        -7.584,
-        1.304,
-        0.551
+        -5.343,
+        1.742,
+        -0.052
       ],
-      "fov": 32.27,
-      "aspect": 2.2236,
+      "fov": 49.44,
+      "aspect": 1.6291,
       "target": [
-        2.4,
-        1.467,
-        -0.005
+        4.628,
+        1.637,
+        0.707
       ]
     },
-    "url": "http://localhost:5173/loops/warehouse/",
-    "view": "http://localhost:5173/loops/warehouse/?cam=-7.584%2C1.304%2C0.551&tgt=2.4%2C1.467%2C-0.005&sel=SM_DPW_MetalWhite_017002&review=1",
-    "shot": "shots/n023.jpg",
-    "resolution": "Fixed: SM_DPW_MetalWhite_017.002 AND its twin SM_DPW_MetalWhite_001.002 (same geometry, other side) both wore 'Edge Wear Dull Green'; the adjacent wall's header beam (SM_DPW_MetalWhite_018.002) wears 'Rusted metal_60'. Both switched to Rusted metal_60 to match.",
-    "updated": "2026-08-18T20:52:15.000Z"
+    "url": "http://localhost:5173/loops/dripping-pickle/",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-5.343%2C1.742%2C-0.052&tgt=4.628%2C1.637%2C0.707&sel=Prop_Slavic_Tv001_1&review=1",
+    "shot": "shots/n038.jpg",
+    "resolution": "Done. Prop_Slavic_Tv001_1 plays assets/dripping-pickle/tv_pickles_sinking.mp4 (30 s loop, muted, no audio track) on a cloned Screen_Glow with white emissive so the video grade shows true; its UV atlas window is remapped so the full frame fills the screen. Other TVs keep the still static. Measured with the TVs in frame: 136 fps, zero frames over 28 ms — the video path uploads via the hardware decoder and does not hit the canvas-upload stall. ?tvvideo=0 reverts, ?tvvidglow= dials it, ?tvvidmesh= names a different screen.",
+    "updated": "2026-08-19T17:05:49.413Z"
   },
   {
-    "id": "n024",
+    "id": "n039",
     "status": "closed",
-    "loop": "warehouse",
-    "at": "2026-08-18T20:59:23.464Z",
-    "object": "Column018",
+    "loop": "dripping-pickle",
+    "at": "2026-08-19T18:05:33.739Z",
+    "object": "Prop_Study_Table_Lamp_Metal001_1",
     "objects": [
-      "Column018"
+      "Prop_Study_Table_Lamp_Metal001_1"
     ],
-    "material": "Concrete used",
+    "material": "lamp_glass",
     "point_blender": [
-      -1.372,
-      -2.945,
-      1.723
+      1.683,
+      0.597,
+      1.292
     ],
     "edits": [],
-    "comment": "the columns all picked up a yellow is hue or hue in blender somewhere. It should read like bare concrete.",
+    "comment": "Let's put a dim point light in this lamp",
     "camera": {
       "position": [
-        -7.837,
-        1.957,
-        0.164
+        -4.968,
+        1.725,
+        -0.048
       ],
-      "fov": 32.27,
-      "aspect": 2.2236,
+      "fov": 47.51,
+      "aspect": 1.7043,
       "target": [
-        2.16,
-        1.71,
-        0.255
+        5.03,
+        1.568,
+        -0.179
       ]
     },
-    "url": "http://localhost:5173/loops/warehouse/",
-    "view": "http://localhost:5173/loops/warehouse/?cam=-7.837%2C1.957%2C0.164&tgt=2.16%2C1.71%2C0.255&sel=Column018&review=1",
-    "shot": "shots/n024.jpg",
-    "resolution": "Fixed: the yellow was the texture itself, not a stray tint \u2014 measured mean RGB of all four concrete candidates: 'Concrete used' reads (0.469, 0.452, 0.399), warmth r-b +0.070, while 'Concrete wall' reads (0.559, 0.560, 0.558), +0.001 \u2014 dead neutral. All 8 columns switched to 'Concrete wall', whose graph is plain image-into-socket wiring (base/rough/normal all direct textures), so it exports fully. Verified at this note's camera: bare grey concrete.",
-    "updated": "2026-08-18T21:18:29.000Z"
+    "url": "http://localhost:5173/loops/dripping-pickle/",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-4.968%2C1.725%2C-0.048&tgt=5.03%2C1.568%2C-0.179&sel=Prop_Study_Table_Lamp_Metal001_1&review=1",
+    "shot": "shots/n039.jpg",
+    "resolution": "Done. Both lamps carry a dim warm PointLight (0xffc98a, 0.4, decay 2, no shadow) positioned from the glass shade at load, with a touch of warm emissive on the shade so the light has a visible source: the desk lamp (this note) and the vintage floor lamp brought in from Blender the same session (props_lamp.glb, 90.7k tris budgeted to 17.6k, Draco 91 KB). ?lamp= dials both, 0 removes them. gi_volume.bin re-baked with the lamps in the room.",
+    "updated": "2026-08-19T18:29:33.114Z"
+  },
+  {
+    "id": "n045",
+    "status": "open",
+    "loop": "dripping-pickle",
+    "at": "2026-08-20T00:48:32.671Z",
+    "object": "Wall_DoorSurround_60006_1",
+    "objects": [
+      "Wall_DoorSurround_60006_1"
+    ],
+    "material": "M_Brick_Mural_60",
+    "point_blender": [
+      2.069,
+      -0.137,
+      2.605
+    ],
+    "edits": [],
+    "comment": "Testing comment, test test",
+    "camera": {
+      "position": [
+        -4.969,
+        1.676,
+        -0.048
+      ],
+      "fov": 49,
+      "aspect": 1.6457,
+      "target": [
+        5.03,
+        1.568,
+        -0.179
+      ]
+    },
+    "url": "http://localhost:5173/loops/dripping-pickle/",
+    "view": "http://localhost:5173/loops/dripping-pickle/?cam=-4.969%2C1.676%2C-0.048&tgt=5.03%2C1.568%2C-0.179&sel=Wall_DoorSurround_60006_1&review=1",
+    "shot": "shots/n045.jpg"
   }
 ]

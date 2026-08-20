@@ -47,26 +47,36 @@ export const FORMATS = [
 ];
 
 // ── screen-space flare ──────────────────────────────────────────────────────
-// Not a sprite pinned to a light: ANY pixel brighter than the threshold grows
-// ghosts (mirrored copies walking through the optical centre — internal lens
-// reflections), a halo, and an anamorphic horizontal streak. The glazing, the
-// sun pool and the sky through a doorway all flare, and the artefacts slide
-// around naturally as the camera moves, which is what sells it as optics.
-// Runs on LINEAR HDR, so "bright" means real HDR values, not display white.
+// ★ DRAWN AT THE SUN, NOT HARVESTED FROM BRIGHT PIXELS. The first version
+// thresholded the whole frame and mirrored it through the centre — real optics,
+// but a threshold cannot tell the sun from a bright TV (the warehouse screens
+// read 5x brighter than the glazing), so whenever the sun-gate opened, the TV
+// static ghosted as white dash rows and arcs across the room. Now the scene
+// hands this pass the sun's screen position (lens.setSunScreen, driven per
+// frame like the gate) and every element — core, starburst, red ring, the
+// coloured ghost chain, the far green/violet ring, the anamorphic streak — is
+// drawn procedurally along the sun→centre axis, which is the line internal
+// reflections actually march. The frame is sampled at ONE place only, the sun
+// itself, to ask "can this camera see something bright there?" — sun behind a
+// beam or brick means no flare, and no other pixel can ever ghost again.
+// Runs on LINEAR HDR before ACES, so the added light tone-maps like light.
 const FlareShader = {
   uniforms: {
     tDiffuse: { value: null },
-    uFlare:   { value: 0.0 },   // ghost/halo gain; 0 skips all the sampling
+    uFlare:   { value: 0.0 },   // ghost/halo gain; 0 skips the work
     uStreak:  { value: 0.0 },   // anamorphic streak gain
     uThresh:  { value: 0.18 },  // calibrated: the glazing reads ~0.3-0.5 linear
     uAspect:  { value: 16 / 9 },
     // 0..1 — how much the camera faces the sun; the SCENE drives it per frame
     // (lens.setSunGate). Defaults to 1 so loops that never call it keep the old
-    // always-on behaviour. Exists because a threshold CANNOT separate "the sun"
-    // from "a bright screen" — the warehouse TVs are 5x brighter than the
-    // glazing, so the only way to make flare read as sun optics is to gate it
-    // by look direction, not by brightness.
+    // always-on behaviour. Still needed alongside the anchored position: it is
+    // what fades the whole system in over ~17° so it reads as optics.
     uSunGate: { value: 1.0 },
+    // The sun's position in 0..1 screen UV (lens.setSunScreen). May sit outside
+    // the frame — flare persists a while past the edge, like a real lens. The
+    // default parks it far above the frame so a scene that never calls the
+    // setter renders no flare rather than a wrong one.
+    uSunUv:   { value: new THREE.Vector2(0.5, 3.0) },
   },
   vertexShader: `
     varying vec2 vUv;
@@ -77,29 +87,15 @@ const FlareShader = {
   fragmentShader: `
     uniform sampler2D tDiffuse;
     uniform float uFlare, uStreak, uThresh, uAspect, uSunGate;
+    uniform vec2 uSunUv;
     varying vec2 vUv;
 
-    // thresholded fetch, softened with a tiny cross so ghost edges do not alias
-    vec3 bright(vec2 uv) {
-      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0);
-      vec2 px = vec2(0.002, 0.002 * uAspect);
-      vec3 c = texture2D(tDiffuse, uv).rgb * 0.4
-             + texture2D(tDiffuse, uv + vec2(px.x, 0.0)).rgb * 0.15
-             + texture2D(tDiffuse, uv - vec2(px.x, 0.0)).rgb * 0.15
-             + texture2D(tDiffuse, uv + vec2(0.0, px.y)).rgb * 0.15
-             + texture2D(tDiffuse, uv - vec2(0.0, px.y)).rgb * 0.15;
-      return max(c - uThresh, vec3(0.0));
-    }
+    float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
-    // Ghost/halo fetch: a real ghost is DEFOCUSED, and sampling the source sharply
-    // is how the TV static ghosted as animated white speckle on the dark walls (a
-    // field of tiny bright dots stays a field of tiny bright dots through a sharp
-    // mirror). A 3x3 average over ~1.5% of the frame turns speckle into the dim
-    // soft blob a lens actually produces — and averaging BEFORE the threshold also
-    // means a lone hot pixel contributes a ninth, not its full value. The streak
-    // keeps the sharp fetch: a crisp horizontal line is its whole point.
+    // Defocused probe at the sun's own position — the single place the frame
+    // is sampled. 3x3 over ~1.5% of the frame so one hot pixel cannot flick
+    // the whole flare on and off.
     vec3 brightSoft(vec2 uv) {
-      if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec3(0.0);
       vec2 px = vec2(0.007, 0.007 * uAspect);
       vec3 c = vec3(0.0);
       for (int y = -1; y <= 1; y++)
@@ -108,48 +104,76 @@ const FlareShader = {
       return max(c / 9.0 - uThresh, vec3(0.0));
     }
 
+    // soft-edged disc and gaussian ring, distances in aspect-corrected UV
+    float disc(float d, float rad) { return smoothstep(rad, rad * 0.55, d); }
+    float ringf(float d, float rad, float w) {
+      float x = (d - rad) / w; return exp(-x * x);
+    }
+
     void main() {
       vec3 scene = texture2D(tDiffuse, vUv).rgb;
-      vec3 flare = vec3(0.0);
       float fl = uFlare * uSunGate;
       float st = uStreak * uSunGate;
+      if (fl <= 0.0 && st <= 0.0) { gl_FragColor = vec4(scene, 1.0); return; }
+
+      // Visibility: fade out as the sun leaves the frame (a lens keeps flaring
+      // for a while — kill it at the edge and it pops), and while it IS in
+      // frame, ask the image whether the sun is actually visible there. A sun
+      // behind a beam probes dark and the flare dies, which is the honest cue.
+      float off = max(max(-uSunUv.x, uSunUv.x - 1.0), max(-uSunUv.y, uSunUv.y - 1.0));
+      float offFade = 1.0 - smoothstep(0.0, 0.35, max(off, 0.0));
+      float inFrame = 1.0 - smoothstep(0.0, 0.05, max(off, 0.0));
+      float occ = smoothstep(0.0, 0.15, luma(brightSoft(clamp(uSunUv, vec2(0.02), vec2(0.98)))));
+      float vis = offFade * mix(1.0, occ, inFrame);
+      if (vis <= 0.001) { gl_FragColor = vec4(scene, 1.0); return; }
+
+      // aspect-corrected space, so discs stay round on a wide canvas
+      vec2 A = vec2(uAspect, 1.0);
+      vec2 p = vUv * A, s = uSunUv * A;
+      vec2 rel = p - s;
+      float r = length(rel);
+      vec2 axis = vec2(0.5) * A - s;   // internal reflections march sun → centre
+      vec3 col = vec3(0.0);
 
       if (fl > 0.0) {
-        // ghosts: the frame mirrored through the centre at a few scales, each
-        // fading toward the frame edge and tinted like coated glass
-        vec2 m = 1.0 - vUv;
-        vec2 toC = vec2(0.5) - vUv;
-        float edge = 1.0 - smoothstep(0.2, 0.75, length(toC * vec2(uAspect, 1.0)));
-        flare += brightSoft(mix(vec2(0.5), m, 0.35)) * 0.30 * vec3(1.0, 0.85, 0.7) * edge;
-        flare += brightSoft(mix(vec2(0.5), m, 0.65)) * 0.20 * vec3(0.7, 0.9, 1.0) * edge;
-        flare += brightSoft(mix(vec2(0.5), m, -0.4)) * 0.15 * vec3(0.85, 1.0, 0.85) * edge;
-        // halo: sample a ring's worth away from the centre along this pixel's ray
-        vec2 haloVec = normalize(toC + vec2(1e-5)) * 0.42;
-        flare += brightSoft(vUv + haloVec) * 0.20 * vec3(0.6, 0.75, 1.0)
-               * smoothstep(0.5, 0.1, abs(length(toC * vec2(uAspect, 1.0)) - 0.35));
-        flare *= fl;
+        // core glow + the wide warm breath around the source
+        col += vec3(1.0, 0.92, 0.82) * 2.5 * exp(-r * r * 240.0);
+        col += vec3(1.0, 0.45, 0.32) * 0.28 * exp(-r * r * 5.5);
+        // starburst: two ray frequencies so it does not read as a stencil
+        float ang = atan(rel.y, rel.x);
+        float rays = pow(abs(sin(ang * 4.0)), 24.0) * 0.7
+                   + pow(abs(sin(ang * 7.0 + 1.3)), 60.0) * 0.5;
+        col += vec3(1.0, 0.8, 0.7) * rays * exp(-r * 5.0) * 0.5;
+        // the red-orange ring hugging the source
+        col += vec3(1.0, 0.34, 0.22) * 0.55 * ringf(r, 0.115, 0.012);
+        // ghost chain: coated-glass colours, alternating warm and cool
+        vec2 g;
+        g = s + axis * 0.85;
+        col += vec3(1.0, 0.72, 0.45) * 0.16 * disc(length(p - g), 0.040);
+        g = s + axis * 1.12;
+        col += vec3(0.45, 1.0, 0.80) * 0.22 * disc(length(p - g), 0.014);
+        g = s + axis * 1.35;
+        col += vec3(1.0, 0.62, 0.30) * 0.14
+             * (disc(length(p - g), 0.065) - 0.6 * disc(length(p - g), 0.035));
+        g = s + axis * 1.55;
+        col += vec3(0.42, 0.62, 1.0) * 0.25 * disc(length(p - g), 0.020);
+        // the far ring: green body with a violet fringe just outside it
+        g = s + axis * 1.95;
+        float dg = length(p - g);
+        col += vec3(0.45, 0.85, 0.40) * 0.30 * ringf(dg, 0.165, 0.010)
+             + vec3(0.55, 0.38, 0.95) * 0.22 * ringf(dg, 0.178, 0.008)
+             + vec3(0.35, 0.75, 0.35) * 0.05 * disc(dg, 0.165);
+        col *= fl;
       }
 
       if (st > 0.0) {
-        // anamorphic streak: gather horizontally with exponential spacing —
-        // 8 taps a side reads as a clean blue line without a separate blur RT.
-        // Soft fetch here too: sharp taps on the TV static painted faint speckle
-        // ROWS across the room at screen-TV height (the far taps reach ~28% of
-        // the frame, so the rows landed on the chalkboard wall). The gather is
-        // already a horizontal smear, so pre-blurring the source keeps the line
-        // a line — it just stops point-sampling noise.
-        vec3 s = vec3(0.0);
-        float wsum = 0.0;
-        for (int i = 1; i <= 8; i++) {
-          float d = 0.004 * pow(1.7, float(i));
-          float w = 1.0 / float(i * i);
-          s += (brightSoft(vUv + vec2(d, 0.0)) + brightSoft(vUv - vec2(d, 0.0))) * w;
-          wsum += 2.0 * w;
-        }
-        flare += (s / wsum) * st * 2.0 * vec3(0.55, 0.7, 1.0);
+        // anamorphic streak through the sun itself — a drawn line, not a
+        // gather, so the TV wall cannot paint speckle rows any more
+        float w = exp(-rel.y * rel.y * 5200.0) * exp(-abs(rel.x) * 1.9);
+        col += vec3(0.55, 0.7, 1.0) * w * st * 0.9;
       }
 
-      gl_FragColor = vec4(scene + flare, 1.0);
+      gl_FragColor = vec4(scene + col * vis, 1.0);
     }`,
 };
 
@@ -264,6 +288,10 @@ export function createLens({ setHFov } = {}) {
     },
     /** 0..1, how much the camera faces the sun — scenes drive this per frame. */
     setSunGate(v) { fu.uSunGate.value = v; },
+    /** The sun's screen position in 0..1 UV, driven per frame alongside the
+     *  gate. May land outside 0..1 — the shader fades the flare out over the
+     *  next ~35% of the frame rather than popping it at the edge. */
+    setSunScreen(x, y) { fu.uSunUv.value.set(x, y); },
     apply(idOrPreset) {
       const p = typeof idOrPreset === 'string'
         ? FORMATS.find((f) => f.id === idOrPreset) : idOrPreset;

@@ -55,6 +55,19 @@
       display: grid; grid-template-columns: 190px 1fr; gap: 18px;
       background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px;
     }
+    /* Thumbnail view: the picture leads and the prose condenses — a wall of
+       screenshots to scan, where list view is a pile to work through. Same
+       cards, same actions; only the shape changes. */
+    .grid.thumbs { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); max-width: none; }
+    .grid.thumbs .note { grid-template-columns: 1fr; gap: 10px; padding: 12px 14px 14px; }
+    .grid.thumbs .comment { font-size: 13px; }
+    .grid.thumbs input[type=text] { min-width: 0; flex-basis: 130px; }
+    select {
+      font: inherit; font-size: 13px; color: var(--ink); background: var(--panel);
+      border: 1px solid var(--line2); border-radius: 6px; padding: 7px 10px; cursor: pointer;
+    }
+    select:hover { border-color: var(--accent); }
+    select:focus { outline: none; border-color: var(--open); }
     .note[data-status="closed"] { opacity: .55; }
     .note[data-status="closed"]:hover { opacity: 1; }
     .shot { width: 100%; border-radius: 6px; border: 1px solid var(--line2); display: block;
@@ -118,6 +131,15 @@
     <button id="f-open"   aria-pressed="true">Open</button>
     <button id="f-closed" aria-pressed="false">Done</button>
     <button id="f-all"    aria-pressed="false">All</button>
+    <select id="sort" title="Sort the notes">
+      <option value="newest">Newest first</option>
+      <option value="oldest">Oldest first</option>
+      <option value="status">Open first</option>
+      <option value="object">By object</option>
+      <option value="scene">By scene</option>
+    </select>
+    <button id="v-list"   aria-pressed="true"  title="One note per row, full detail">List</button>
+    <button id="v-thumbs" aria-pressed="false" title="A wall of screenshots">Thumbnails</button>
   </div>
 
   <div class="grid" id="grid"></div>
@@ -417,6 +439,8 @@
 
     const shown = mine.filter((n) =>
       filter === 'all' ? true : filter === 'open' ? n.status !== 'closed' : n.status === 'closed');
+    shown.sort(SORTS[sort] ?? SORTS.newest);
+    grid.classList.toggle('thumbs', view === 'thumbs');
 
     grid.replaceChildren(...(shown.length
       ? shown.map(card)
@@ -442,6 +466,40 @@
       render();
     };
   }
+
+  // Sort and view both persist per browser — how you read a tracker is a habit,
+  // not a per-visit decision. Ids order chronologically (n001…), so "newest"
+  // is an id sort, which also keeps notes filed the same minute in file order.
+  const idNum = (n) => Number((/^n(\d+)/.exec(n.id ?? '') ?? [0, 0])[1]);
+  const SORTS = {
+    newest: (a, b) => idNum(b) - idNum(a),
+    oldest: (a, b) => idNum(a) - idNum(b),
+    status: (a, b) => (a.status === 'closed') - (b.status === 'closed') || idNum(b) - idNum(a),
+    object: (a, b) => String(a.object ?? '').localeCompare(String(b.object ?? '')) || idNum(a) - idNum(b),
+    scene:  (a, b) => String(a.loop ?? '').localeCompare(String(b.loop ?? '')) || idNum(b) - idNum(a),
+  };
+  let sort = localStorage.getItem('fbk-sort') ?? 'newest';
+  if (!SORTS[sort]) sort = 'newest';
+  const $sort = document.getElementById('sort');
+  $sort.value = sort;
+  $sort.onchange = () => {
+    sort = $sort.value;
+    localStorage.setItem('fbk-sort', sort);
+    render();
+  };
+
+  let view = localStorage.getItem('fbk-view') === 'thumbs' ? 'thumbs' : 'list';
+  const setView = (v) => {
+    view = v;
+    localStorage.setItem('fbk-view', v);
+    document.getElementById('v-list').setAttribute('aria-pressed', String(v === 'list'));
+    document.getElementById('v-thumbs').setAttribute('aria-pressed', String(v === 'thumbs'));
+    render();
+  };
+  document.getElementById('v-list').onclick = () => setView('list');
+  document.getElementById('v-thumbs').onclick = () => setView('thumbs');
+  document.getElementById('v-list').setAttribute('aria-pressed', String(view === 'list'));
+  document.getElementById('v-thumbs').setAttribute('aria-pressed', String(view === 'thumbs'));
 
   await load();
   drawProjects();

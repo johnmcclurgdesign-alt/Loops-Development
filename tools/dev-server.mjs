@@ -10,6 +10,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.argv[2] ?? 5173);
@@ -19,6 +20,10 @@ const NOTES = join(FEEDBACK_DIR, 'notes.json');
 // Deleted notes are moved here rather than dropped. A note carries a screenshot and a
 // camera that cannot be reconstructed, so a mis-click must be recoverable.
 const DELETED = join(FEEDBACK_DIR, 'deleted.json');
+// Cat behaviours authored in loops/cat-sequencer/. They live under assets/ rather
+// than feedback/ because they are SHOW DATA, not review traffic — the warehouse
+// cat is meant to run one by name.
+const BEHAVIORS = join(ROOT, 'assets', 'cat', 'behaviors.json');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -52,6 +57,14 @@ function readBody(req, limit = 25 * 1024 * 1024) {
   });
 }
 
+// A missing file is not an error — nobody has authored a behaviour yet.
+async function loadBehaviors() {
+  try {
+    const d = JSON.parse(await readFile(BEHAVIORS, 'utf8'));
+    return { version: d.version ?? 1, behaviors: Array.isArray(d.behaviors) ? d.behaviors : [] };
+  } catch { return { version: 1, behaviors: [] }; }
+}
+
 async function loadNotes() {
   try { return JSON.parse(await readFile(NOTES, 'utf8')); }
   catch { return []; }
@@ -73,6 +86,39 @@ function nextId(...lists) {
     return hit ? Math.max(m, Number(hit[1])) : m;
   }, 0);
   return 'n' + String(max + 1).padStart(3, '0');
+}
+
+// ── auto-push (2026-08-19) ──────────────────────────────────────────────────
+// A note written into the repo used to sit UNCOMMITTED until someone remembered
+// to file it — shots lingered in the working tree for hours. Now every write to
+// feedback/ schedules a commit+push of that directory, debounced 5 s so a note
+// and its screenshot (and a burst of tick-offs) land as ONE commit. Failures
+// only warn: no remote, no auth, or offline must never break note-taking.
+// NO_AUTOPUSH=1 turns it off for a session.
+const git = (args) => new Promise((ok) =>
+  execFile('git', args, { cwd: ROOT }, (err, stdout, stderr) =>
+    ok({ err, out: String(stdout) + String(stderr) })));
+let pushTimer = null;
+const pushReasons = new Set();
+function schedulePush(reason) {
+  if (process.env.NO_AUTOPUSH) return;
+  pushReasons.add(reason);
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(async () => {
+    const what = [...pushReasons].join(', ');
+    pushReasons.clear();
+    let r = await git(['add', 'feedback']);
+    if (r.err) { console.warn('  ↥ autopush add failed:', r.out.trim()); return; }
+    r = await git(['commit', '-m', `Notes: ${what}`]);
+    if (r.err) {
+      if (!/nothing to commit/.test(r.out)) console.warn('  ↥ autopush commit failed:', r.out.trim());
+      return;
+    }
+    r = await git(['push']);
+    console.log(r.err
+      ? `  ↥ committed (${what}) but push failed — push by hand when back online`
+      : `  ↥ pushed to GitHub: ${what}`);
+  }, 5000);
 }
 
 const server = createServer(async (req, res) => {
@@ -100,6 +146,7 @@ const server = createServer(async (req, res) => {
       await writeFile(NOTES, JSON.stringify(notes, null, 2) + '\n', 'utf8');
 
       console.log(`  ✎ ${id}  ${note.object ?? '(no object)'}  —  ${String(note.comment ?? '').slice(0, 60)}`);
+      schedulePush(`${id} filed`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, id, shot }));
     } catch (e) {
@@ -136,6 +183,7 @@ const server = createServer(async (req, res) => {
 
       await writeFile(NOTES, JSON.stringify(notes, null, 2) + '\n', 'utf8');
       console.log(`  ✓ ${id}  ${note.status}${note.resolution ? '  —  ' + note.resolution.slice(0, 60) : ''}`);
+      schedulePush(`${id} ${note.status}`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, note }));
     } catch (e) {
@@ -171,6 +219,7 @@ const server = createServer(async (req, res) => {
       await writeFile(NOTES, JSON.stringify(notes, null, 2) + '\n', 'utf8');
 
       console.log(`  ✗ ${id}  deleted  —  moved to feedback/deleted.json`);
+      schedulePush(`${id} deleted`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, id, notes }));
     } catch (e) {
@@ -207,6 +256,71 @@ const server = createServer(async (req, res) => {
       console.log(`  ▣ assets/thumbs/${file}  ${(bytes.length / 1024).toFixed(0)} KB`);
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, path: `assets/thumbs/${file}`, bytes: bytes.length }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));
+    }
+    return;
+  }
+
+  // ---- cat behaviour endpoints --------------------------------------------
+  // Upsert by id, so Save on a loaded behaviour EDITS it rather than piling up
+  // near-identical copies — which is what a plain append gives you the first
+  // time someone tweaks a duration and saves again.
+  if (url.pathname === '/api/behaviors' && req.method === 'GET') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(await loadBehaviors()));
+    return;
+  }
+
+  if (url.pathname === '/api/behaviors' && req.method === 'POST') {
+    try {
+      const b = JSON.parse((await readBody(req)).toString('utf8'));
+      // The id is how the warehouse cat will ask for one by name, so it has to
+      // stay a plain slug — no paths, no spaces, nothing that needs quoting.
+      if (!/^[a-z0-9][a-z0-9_-]*$/.test(b.id ?? '')) throw new Error('bad id: ' + b.id);
+      if (!Array.isArray(b.steps) || !b.steps.length) throw new Error('a behaviour needs at least one step');
+
+      const doc = await loadBehaviors();
+      const i = doc.behaviors.findIndex((x) => x.id === b.id);
+      const rec = {
+        id: b.id,
+        name: String(b.name ?? b.id),
+        loop: b.loop !== false,
+        notes: String(b.notes ?? ''),
+        steps: b.steps.map((s) => ({
+          clip: String(s.clip),
+          seconds: Math.max(0.05, Number(s.seconds) || 0),
+          fade: Math.max(0, Number(s.fade) || 0),
+        })),
+      };
+      if (i >= 0) doc.behaviors[i] = rec; else doc.behaviors.push(rec);
+      await mkdir(join(ROOT, 'assets', 'cat'), { recursive: true });
+      await writeFile(BEHAVIORS, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+
+      const secs = rec.steps.reduce((a, s) => a + s.seconds, 0);
+      console.log('  \u266a ' + rec.id + '  ' + (i >= 0 ? 'updated' : 'saved') +
+                  '  \u2014  ' + rec.steps.length + ' steps, ' + secs.toFixed(1) + 's');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, id: rec.id, behaviors: doc.behaviors }));
+    } catch (e) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/behaviors/delete' && req.method === 'POST') {
+    try {
+      const { id } = JSON.parse((await readBody(req)).toString('utf8'));
+      const doc = await loadBehaviors();
+      const i = doc.behaviors.findIndex((x) => x.id === id);
+      if (i < 0) throw new Error('no such behaviour: ' + id);
+      const [gone] = doc.behaviors.splice(i, 1);
+      await writeFile(BEHAVIORS, JSON.stringify(doc, null, 2) + '\n', 'utf8');
+      console.log('  \u2717 ' + gone.id + '  behaviour deleted');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, behaviors: doc.behaviors }));
     } catch (e) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: false, error: String(e.message ?? e) }));

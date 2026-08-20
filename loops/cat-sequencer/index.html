@@ -93,6 +93,7 @@
     import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { createFlyCam }  from '../../tools/flycam.js';
+    import { createCatTimeline } from '../../tools/cat-timeline.js';
     import * as YUKA         from 'yuka';
 
     // ── palette ─────────────────────────────────────────────────────
@@ -141,9 +142,17 @@
     // meant a note could only be left by someone who already knew the flag — so anyone opening
     // the plain link had no way to say anything, which is backwards for a review tool. The
     // panel works out for itself whether it can WRITE (dev server present) or only copy to the
-    // clipboard, so the URL no longer has to say. `?fb=0` for a clean frame to capture.
+    // clipboard, so the URL no longer has to say.
     // Note this pins preserveDrawingBuffer on for every visitor — the cost of screenshots.
-    const FEEDBACK = q.get('fb') !== '0' && q.get('dev') !== '0' && q.get('review') !== '0';
+    //
+    // ★ OPT-IN HERE SINCE 2026-08-19, unlike every other loop. This scene is a
+    // workbench for the animation, not a review build — notes about the SHOW get
+    // written in loops/dripping-pickle/. The panel also owned the bottom-right
+    // 310 px that the behaviour timeline wants, so leaving it on cost the bar a
+    // third of its width for a panel nobody was filing against here.
+    // `?fb=1` (or ?dev=1 / ?review=1) brings it back, and the timeline narrows
+    // itself to clear it when it does.
+    const FEEDBACK = q.get('fb') === '1' || q.get('dev') === '1' || q.get('review') === '1';
 
     // Sitting, not standing — see play() below.
     const START_CLIP = q.get('clip') ?? 'sit_loop';
@@ -345,6 +354,8 @@
 
     let mixer = null, current = null, model = null;
     const actions = {};
+    let timeline = null;        // the behaviour bar, built once the clips are in
+    let setWanderRef = null;    // buildWanderUI's setter, so the timeline can switch it off
     let speed = 1.0;                     // manual clip playback rate (wander OFF)
 
     // Yuka side. Kept separate from the three.js side on purpose: Yuka decides
@@ -392,6 +403,46 @@
       for (const b of document.querySelectorAll('#clips button')) {
         b.classList.toggle('on', b.dataset.clip === name);
       }
+    }
+
+    // ── scrubbing ───────────────────────────────────────────────────
+    // The timeline's playhead has to pose the cat at an ARBITRARY moment, and
+    // that includes part-way through a crossfade. play() cannot express it: it
+    // STARTS a fade, it does not sample one. So the scrub path drives the
+    // actions directly and steps the mixer by zero to apply the result.
+    //
+    // ★ paused = true is what holds the pose. It makes the action's effective
+    // timeScale zero, so mixer.update(0) blends every active action at the time
+    // we just wrote without advancing any of them. Without it the first real
+    // frame after a scrub jumps, because the actions are still running.
+    function scrubPose(entries) {
+      if (!mixer) return;
+      for (const a of Object.values(actions)) { a.stop(); a.setEffectiveWeight(0); }
+      let top = null, topW = 0;
+      for (const e of entries) {
+        const a = actions[e.clip];
+        if (!a || !(e.weight > 0)) continue;
+        a.reset();                       // clears paused/time/weight — must come first
+        a.play();
+        a.paused = true;
+        a.time = e.time;
+        a.setEffectiveWeight(e.weight);
+        if (e.weight > topW) { topW = e.weight; top = e.clip; }
+      }
+      // A scrub is not a "currently playing" clip: leaving `current` set would let
+      // play() early-return onto a PAUSED action, which reads as the cat freezing.
+      current = null;
+      mixer.update(0);
+      for (const b of document.querySelectorAll('#clips button')) {
+        b.classList.toggle('on', b.dataset.clip === top);
+      }
+    }
+
+    // Hand the mixer back to normal playback.
+    function scrubEnd() {
+      if (!mixer) return;
+      for (const a of Object.values(actions)) { a.paused = false; a.stop(); a.setEffectiveWeight(0); }
+      current = null;
     }
 
     (async () => {
@@ -443,6 +494,32 @@
         }
 
         buildClipUI(loaded.filter((l) => l.clip).map((l) => l.c));
+
+        // The behaviour bar. It is handed the scene's own crossfader rather than
+        // the mixer, so there is still exactly one function that knows how a clip
+        // change is made -- see play().
+        timeline = createCatTimeline({
+          clips: loaded.filter((l) => l.clip).map((l) => l.c),
+          play,
+          // Natural length comes off the CLIP, never from a table: a re-export that
+          // changes a clip's length would otherwise leave every default stale.
+          info: (name) => {
+            const a = actions[name];
+            if (!a) return null;
+            return { seconds: a.getClip().duration,
+                     loop: CLIPS.find((c) => c.file === name)?.loop !== false };
+          },
+          current: () => current?.getClip?.().name ?? null,
+          // Wander drives the mixer every frame, so the two cannot both run --
+          // it would re-pick walk/idle on top of whatever step is playing.
+          onRun: (running) => { if (running) setWanderRef?.(false); },
+          // The bar takes the whole width when the feedback panel is off, and
+          // steps aside for it when it is on. Measured off that panel, not typed.
+          rightGap: FEEDBACK ? 336 : 14,
+          pose: scrubPose,
+          endPose: scrubEnd,
+        });
+        window.__seq = timeline;
         // Sitting is the resting state, so it is what he should be doing when you arrive —
         // a standing idle reads as a cat about to do something. Straight into `sit_loop`
         // rather than through `sit_start`, because there is no standing pose to sit down
@@ -537,7 +614,10 @@
         b.textContent = c.label;
         b.title = c.label;            // the label ellipsises at this width
         b.dataset.clip = c.file;
-        b.onclick = () => play(c.file);
+        // Picking a clip by hand stops the behaviour. Left running it would
+        // overwrite your pick on its next step, which reads as the button
+        // being ignored.
+        b.onclick = () => { timeline?.player.stop(); play(c.file); };
         g.appendChild(b);
       }
       box.appendChild(g);
@@ -657,6 +737,7 @@
         onInput: (v) => { stride = v; } }));
 
       setWander(wanderOn);
+      setWanderRef = setWander;
 
       function setWander(on) {
         wanderOn = on;
@@ -801,6 +882,7 @@
       const dt = Math.min(t - prevT, 0.1); prevT = t;
       if (fly) fly.update(dt);        // before controls.update() so damping settles
       if (wanderOn) stepWander(dt);   // before the mixer: it picks the clip and its rate
+      if (timeline) timeline.update(dt);   // same reason, and the two are exclusive
       if (mixer) mixer.update(dt);
       controls.update();
       renderer.render(scene, camera);
@@ -816,6 +898,8 @@
     window.__T = THREE;
     window.__camera = camera; // needed to project a world point to screen in checks
     window.__play = play;
+    window.__actions = actions;   // weights are the only way to SEE a crossfade in a check
+
     window.__step = stepWander;                 // step the sim by hand for scripted checks
     window.__yuka = () => ({ vehicle, wander, homeSeek, roamSpeed, turnR, stride });
   </script>

@@ -46,7 +46,7 @@ mistaken for the real-time look.
 - Pinned to a version in each scene's importmap. Bump deliberately, never silently.
 - Deployed by **GitHub Pages** off `main`. Push, wait ~1 min, it's live.
 
-Live: https://johnmcclurgdesign-alt.github.io/dripping-pickle/
+Live: https://johnmcclurgdesign-alt.github.io/Loops-Development/
 
 ## Running locally
 
@@ -625,19 +625,19 @@ signal you get.
 ## The warehouse build — export ritual and the mural
 
 The production scene is `Assets_Created/DP_Factory_Warehouse_Production.blend` (Scene_60,
-Structure + Props collections). The web loop is `loops/warehouse/`.
+Structure + Props collections). The web loop is `loops/dripping-pickle/`.
 
-- **★ EXPORT VIA `tools/blender-export-warehouse.py` (run inside Blender), NEVER by hand.**
+- **★ EXPORT VIA `tools/blender-export-dripping-pickle.py` (run inside Blender), NEVER by hand.**
   The pickle mural on the gable wall is a LIVE node mix in `M_Brick_Mural_60` — brick bake ×
   painted layer × a `MuralFade` Value node the artist dials in Blender — and glTF carries one
   base-colour image per material, so the script flattens the mix at the current fade, exports,
   and restores the live graph. A hand export ships whichever single image the exporter picks.
   Then finish outside Blender: `glb-webp.mjs` → `glb-basecolor.mjs` with the factors from
-  `assets/warehouse/export-factors.json`, which the export script rewrites on every run —
+  `assets/dripping-pickle/export-factors.json`, which the export script rewrites on every run —
   the windows tint plus any Brightness/Contrast dial an artist parks in front of a Base
   Color texture (folded into baseColorFactor when it is a pure multiply in linear; the
   script WARNS when the dial has a constant offset and cannot ship as a factor).
-  The flattened PNG `assets/warehouse/brick_mural_wall.png` is load-bearing.
+  The flattened PNG `assets/dripping-pickle/brick_mural_wall.png` is load-bearing.
 - **★ THE WALL MODULES' UV ISLANDS OVERLAP — 570 OF 644 OCCUPIED CELLS ON THE MURAL WALL ARE
   CLAIMED BY MORE THAN ONE FACE.** Any bake into a wall's own `UVMap` therefore paints onto
   every face sharing those texels: the first mural attempt appeared three times, chopped
@@ -647,31 +647,65 @@ Structure + Props collections). The web loop is `loops/warehouse/`.
   `texture.channel` automatically. Check overlap before ANY wall bake: rasterise island
   centroids and count cells claimed twice.
 - The mural's painted layer comes from `M_Sign_DrippingPickle_60`'s `BAKED_EXPORT` texture
-  (`assets/warehouse/sign_dripping_pickle_baked.png`) — the sign quad itself is hidden, kept
+  (`assets/dripping-pickle/sign_dripping_pickle_baked.png`) — the sign quad itself is hidden, kept
   only as the bake source. Its original composite graph is parked in the material; to change
   the artwork: relink the composite, re-bake the sign (n021 recipe in feedback notes), then
   re-run the mural layer bakes (`Mural_BASE/COL/ALP`, packed in the blend).
+- **★ A GRADE IN FRONT OF BASE COLOR IS DROPPED, AND `baseColorFactor` CANNOT RESCUE IT.**
+  The factors sweep only catches a Brightness/Contrast whose constant term is ~0, because
+  only a pure multiply is expressible as a float factor. A Hue/Saturation, an RGB Curves, or
+  a Bright/Contrast with an offset is not — the exporter ships the raw source texture and the
+  whole grade vanishes with no warning at all. The roof (`wood_planks_dirt_60`) shipped warm
+  brown planks for weeks while Blender showed weathered grey: Saturation **0.0**, Value 0.5,
+  Bright −0.1 / Contrast −0.3, then a midtone curve lift. `GRADED_TILES` in the export script
+  is the fix — §1b bakes the chain to a tile and §2b temp-swaps it in, same ritual as the mural.
+- **★ BAKE THAT GRADE IN IMAGE SPACE, NOT UV SPACE.** When the chain is a per-pixel function
+  of ONE source image — which it is whenever no second texture is mixed in — bake the 0..1
+  tile through the same nodes and the texture still **tiles**. A UV-space bake would flatten
+  the roof into an atlas and destroy the repeat. And **zero the Mapping node's offset before
+  baking**: the exporter writes that offset as `KHR_texture_transform` (the roof's is 0.5),
+  so a tile baked with it already in gets shifted twice.
+- **The material already carries a node named `BAKE_TARGET`** (the inert lightmap one). A new
+  target node therefore becomes `BAKE_TARGET.001`, the assert on `nodes.active.name` fires, and
+  Cycles would have baked the lightmap slot. Remove it from the copy first.
+- **To ship a grade WITHOUT a full re-export: `tools/glb-replace-image.mjs`.** Bake the tile,
+  crush it with the same ffmpeg settings `glb-webp.mjs` uses (`-c:v libwebp -lossless 0
+  -quality 85 -compression_level 6`), then swap that one image's bytes in the glb. Every
+  bufferView keeps its index so Draco payloads and accessors still resolve, but the BIN chunk
+  is rebuilt end to end because the new bytes are a different length. It **exits non-zero on a
+  missing image name** — a silent skip is how a texture ships un-graded while the run is green.
+  Verify in the browser by reading the decoded `material.map.image` back, not by eye: the roof
+  reads mean **115.6 grey with a max channel deviation of 1**, against the bake's 115.78.
+- **Known, unfixed: `Frame.002` (the vintage refrigerator, in `props.glb`) has a Bright/Contrast
+  offset of −0.05**, so it is in exactly this failure class and currently exports wrong. The
+  export script prints a WARNING for it on every run. It needs the same `GRADED_TILES` treatment
+  in the props pipeline.
 
 ## The warehouse loop — lighting, props, camera (state as of 2026-08-18)
 
-`loops/warehouse/` is **the production build and the hero card**; `factory-rt` and
+`loops/dripping-pickle/` is **the production build and the hero card**; `factory-rt` and
 `factory-60` are demoted to reference. Live at
-`https://johnmcclurgdesign-alt.github.io/dripping-pickle/loops/warehouse/`.
+`https://johnmcclurgdesign-alt.github.io/Loops-Development/loops/dripping-pickle/`.
 
 **Lighting is the factory-rt stack, re-wired and re-fitted**, not a copy: GI volume
-(700 probes at 1.6 m, 2 bounces, shipped as `assets/warehouse/gi_volume.bin` so a
+(700 probes at 1.6 m, 2 bounces, shipped as `assets/dripping-pickle/gi_volume.bin` so a
 visitor never bakes), PCSS sun, rect skylights measured off the glb's own panes
 (10 apertures, 4 roof), GTAO with the floor split, raymarched shafts at a whisper.
 Every trap from the `Real-time lighting` section below still applies — bias in
 metres, `planeOf()` not bounding boxes, glass/decals non-casting, `?gibake=1` to
-force a fresh bake. Grade fitted to the reference render: exposure 1.35, sun 2.1
-at size 0.075, skylights 0.8, AO 1.35 / floor 1.45.
+force a fresh bake. Grade re-dialled live by the art director 2026-08-19 (the
+authoritative values are the RT_* defaults in the loop): exposure 2.2, a
+near-hard sun 5.31 at size 0.0139 (the soft-pool 2.1/0.075 look is out),
+skylights 0.94, bounce 1.08 with walls on direct light alone (giwall 0),
+contact walls 0.38. gi_volume.bin is baked at exactly these values — re-bake
+after ANY change to sun/skylight defaults or the shipped bounce contradicts
+the rig.
 
 - **★ RE-BAKE THE GI WHENEVER THE PROP SET CHANGES.** 69 props are 69 new occluders;
   the volume baked against an empty room lights a full one wrongly. `?gibake=1`,
   then `window.__rt.saveGI()` and drop the file over `gi_volume.bin`.
 
-**Props ship as their own `assets/warehouse/props.glb`** so set dressing never forces
+**Props ship as their own `assets/dripping-pickle/props.glb`** so set dressing never forces
 a building re-export. They load BEFORE the bake so they occlude and receive bounce.
 
 - **★ BUDGET PROP GEOMETRY BY SCREEN SIZE, NOT BY A FLAT RATIO.** The set arrived at
@@ -728,15 +762,44 @@ build imports `{ Pass } from "postprocessing"` for a flavour we don't use — th
 importmap maps that name to `tools/stub-postprocessing.js` rather than shipping a
 second post library — and **`gammaCorrection` must be set FALSE** (default true
 converts to sRGB mid-chain; with OutputPass doing ACES at the end the whole frame
-washes out white). `shade` (walls) and `shadef` (up-facing) split its
-intensity — a pcss.js-style exact-string patch on the composite shader (throws on a
-version move) that mixes two exponents by world up-ness. Beware: n8ao's `getWorldPos`
+washes out white). `shade` (walls), `shadef` (up-facing) and `shadep`
+(props — whole objects, art director's split: one dial for walls AND props meant
+grounding the junction always muddied the set dressing) split its intensity — a
+pcss.js-style exact-string patch on the composite shader (throws on a version move).
+Up-ness comes from a reconstructed normal; PROP pixels are identified by a per-frame
+depth-only render of camera layer 1 (prop meshes enable it at load) compared against
+scene depth in the composite — screen-space AO has no other way to know what an
+object is. Beware: n8ao's `getWorldPos`
 only inverts the PROJECTION — its "world" positions and normals are view-space
 despite the name; the up test needs the `viewMatrixInv` rotate (already a uniform).
 `aorad`/`aofall` are its radius and falloff. `tools/ao-floor.js` and the
 aoamt/aothick/aofrad/aofamt params are retired
 here; the factory loops still run the old GTAO + floor-split stack. Real grounding
 under props is the skyShadow light (skyshadow 0.9), not the AO.
+
+**★ THE WAREHOUSE FRAME BUDGET, AND THE THREE THINGS THAT BLEW IT (2026-08-19).** All
+three were invisible at a small window and compounding at a big one — profile at
+2560-wide before believing any number taken at the default pane size.
+- **The shafts' depth prepass rendered the scene with FULL MATERIALS** (PCSS + GI +
+  textures) and kept only the depth; so did the AO's props pass. `renderDepthOnly()`
+  overrides with a `MeshDepthMaterial` (DoubleSide — override ignores per-material
+  side) and HIDES `depthWrite:false` objects rather than overriding them, or glass
+  writes depth and beams die at the panes. 18.8 → 11.9 ms at the loop camera.
+- **The sun's 4096 shadow map was the frame-pacing bug.** PCSS scatters 40 taps per
+  pixel across it and the cache thrashes: at 2560x1340, p50 7 ms / p95 42 — a third
+  of frames spiking — against a flat 7.0 ms / zero spikes at **2048** (`?sunmap=`).
+  1024 buys nothing further. The penumbra is far wider than a 2048 texel, so the
+  look is untouched. Diagnose this family by toggling `sun.castShadow` live.
+- **`adaptAA` earned 1.25x SSAA once and never re-measured**, so SSAA earned in a
+  small window survived a maximise to 4K (1.56x of 8.3 MP, 30+ ms, and a saturated
+  GPU process drags ALL of Chrome — reported as "it slows the whole browser over
+  time"; the "over time" was the window growing after the one-shot measurement).
+  Any resize now resets to 1x and re-earns at the real size. The n8ao beauty target
+  also dropped 8x → 4x MSAA (`?beautysamples=`): 8x was ~7 ms of bandwidth at
+  2560-wide and factory-rt had already measured 4x as the step that fixes edges.
+- Steady-state is leak-free: 4 min watched, geometries/textures/programs/heap all
+  flat. If "worse over time" comes back, watch `renderer.info.memory` + heap in
+  5 s buckets first — the ratchets above masquerade as leaks.
 
 **Camera drift — `tools/driftcam.js`.** Slow Lissajous sway (~12 cm at amount 1;
 **default 0 — opt-in via the dial**: even ~7 px of tamed sway was reported as
@@ -793,6 +856,18 @@ aperture, Flare, Streak. `window.__lens` for scripted checks.
   Direction is the only signal that makes flare read as optics: it fades in over ~17°
   as the view tilts toward the skylights and is fully off at the level default view.
   Defaults to 1 (always on) for loops that never call it.
+- **★ AND SINCE LATER THAT DAY THE FLARE IS ANCHORED, NOT HARVESTED.** The gate alone
+  was not enough: open it by facing the skylights with the TVs in frame and the
+  bright-pixel harvest ghosted the static as white dash rows and arcs (reported live,
+  reproduced, fixed). The pass now takes the sun's screen position too —
+  `lens.setSunScreen(x, y)`, projected per frame next to the gate in the scene — and
+  draws every element (core, starburst, red ring, coloured ghost chain, far
+  green/violet ring, streak) procedurally along the sun→centre axis. The frame is
+  sampled at exactly ONE point, the sun itself, as an occlusion probe (sun behind a
+  beam = no flare); no other pixel can ever contribute an artifact. Sun position may
+  sit outside 0..1 — the shader fades over ~35% past the edge instead of popping. A
+  scene that sets the gate but never calls `setSunScreen` gets NO flare (the default
+  parks the sun far off-frame); wire both or neither.
 - **★ FLARE THRESHOLDS MUST BE MEASURED AGAINST THE SCENE, NEVER GUESSED.** The first
   value (1.5 linear) sat above everything in this moody room, so the pass ran and did
   **nothing** — which reads as broken plumbing, not a wrong number. Prove the
@@ -876,11 +951,14 @@ the barrel already moved.
   the edits are stored, never the scene. Undo history is deliberately not persisted.
 - The note carries `edits[]` — every object still off its mark, in Blender metres and
   degrees — plus `objects[]`, everything that was selected.
-- **The screenshot keeps the green selection outline and drops the handles.** A note
-  read six weeks later is only useful if you can see which object it was about; the
-  handles are thick, occlude the thing being discussed, and say nothing once the drag
-  is over. In a before/after the outline is redrawn for the rewound pose, so the box
-  moves between the halves along with the object.
+- **The screenshot marks the selection with a THICK 2D box + the object's name drawn
+  onto the image, and renders through the scene's `renderFrame`** (2026-08-19). The
+  3D BoxHelper's 1px hairline vanished at capture resolution — a green line around a
+  green TV screen was the reported case — and the old raw `renderer.render` capture
+  bypassed the composer, so shots had no grade/AO/lens/letterbox. Scenes pass
+  `renderFrame` to `initFeedback`; without it capture falls back to the raw render.
+  Handles still never appear in shots. In a before/after the marker is redrawn for
+  the rewound pose, so the box moves between the halves along with the object.
 - Storage is per browser: a teammate opening the same URL sees the clean scene. Notes
   are how the work travels.
 

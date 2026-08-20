@@ -241,9 +241,20 @@ export function createGIVolume({
   // ── material patch ─────────────────────────────────────────────────────────
   const patched = new WeakSet();
 
-  function patch(material) {
+  function patch(material, { gain = 1 } = {}) {
     if (!material || patched.has(material)) return;
     patched.add(material);
+
+    // Per-MATERIAL gain on the volume's contribution. giIntensity is one number
+    // for the whole room, but the volume systematically over-lights big flat
+    // walls relative to a path-traced reference (warehouse: wall patches read
+    // 1.6-2.5x the Blender render while the floor did not) — walls face the
+    // open room, so every probe agrees with them, where floors and cluttered
+    // props sit half in each other's shadow. The gain lives on the material so
+    // a scene can say "walls take less bounce" without re-baking or re-grading.
+    // Exposed on material.userData.giGain for live dials.
+    const gainU = { value: gain };
+    material.userData.giGain = gainU;
 
     // Chain rather than assign. PCSS installs an onBeforeCompile on these same materials,
     // and whichever ran second would otherwise erase the other — which reads as "the GI
@@ -252,6 +263,7 @@ export function createGIVolume({
     material.onBeforeCompile = function (shader, renderer) {
       if (prev) prev.call(this, shader, renderer);
       Object.assign(shader.uniforms, uniforms);
+      shader.uniforms.giGain = gainU;
 
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec3 vGIWorldPos;')
@@ -267,7 +279,7 @@ export function createGIVolume({
           varying vec3 vGIWorldPos;
           uniform sampler3D giSH0, giSH1, giSH2, giSH3;
           uniform vec3 giBoundsMin, giBoundsSize, giHalfTexel, giDims, giStep;
-          uniform float giIntensity, giNormalBias, giBackWeight, giValidThreshold;
+          uniform float giIntensity, giNormalBias, giBackWeight, giValidThreshold, giGain;
           ${SH_GLSL}
           // ★ THE HARDWARE TRILINEAR FETCH CANNOT ASK WHETHER A PROBE CAN SEE THE SURFACE,
           // AND THAT IS WHY CORNERS USED TO GLOW (n018). A single texture() call blends the
@@ -366,7 +378,7 @@ export function createGIVolume({
         // that reaches diffuse indirect without touching direct light or specular.
         .replace('#include <lights_fragment_maps>', `#include <lights_fragment_maps>
           #if defined( RE_IndirectDiffuse )
-            irradiance += giVolume( vGIWorldPos, inverseTransformDirection( geometryNormal, viewMatrix ) );
+            irradiance += giVolume( vGIWorldPos, inverseTransformDirection( geometryNormal, viewMatrix ) ) * giGain;
           #endif`);
     };
     // Without this, three reuses a cached program from an unpatched material with the

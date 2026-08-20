@@ -126,7 +126,18 @@ export function restoreView({ scene, camera, controls }) {
 //                     something on a path. Its transform is an output, so a dragged
 //                     pose is not a suggestion — it is a value that gets overwritten,
 //                     or silently persisted as an offset nothing ever corrects.
-export function initFeedback({ scene, camera, renderer, controls, pickRoot = null, loop = 'scene' }) {
+// renderFrame: optional scene-supplied "draw one full frame now" — composer scenes
+// pass the same function their animation loop uses (beauty target, prepasses, the
+// composer chain), so a captured shot carries the grade, AO, lens and letterbox the
+// reviewer was actually looking at. Without it the capture falls back to a raw
+// renderer.render, which is honest geometry but none of the look.
+// pick: false — the panel loads but NOTHING in the scene is selectable, so no
+// gizmos, no drags and no edits. Presentation mode (?ui=0) needs this: it hides
+// the panel with CSS but still needs the module, because flyTo() is what the
+// warehouse tellies travel with. Hiding the UI alone left a visitor able to pick
+// and drag props they could not see they had moved.
+export function initFeedback({ scene, camera, renderer, controls, pickRoot = null, loop = 'scene',
+                               renderFrame = null, pick = true }) {
   // Captured FIRST, before anything in here can move the camera: the scene has just
   // finished pointing it down the glTF camera's own forward axis, so this is the shot
   // as it was framed in Blender. A deep link (?cam=) is applied later in this function,
@@ -802,6 +813,7 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
   }
 
   function pickAt(clientX, clientY, add = false) {
+    if (!pick) return;                 // presentation mode — see the `pick` option
     const r = renderer.domElement.getBoundingClientRect();
     ndc.x = ((clientX - r.left) / r.width) * 2 - 1;
     ndc.y = -((clientY - r.top) / r.height) * 2 + 1;
@@ -945,6 +957,7 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
     if (mod || e.altKey) return;
     if (e.key === 'Escape') deselect();
     if (e.key === 'Home') { flyTo(home.position, home.target); e.preventDefault(); }
+    if (!pick) return;                 // presentation mode — see the `pick` option
     // Unreal's keys — this team lives in UE, and nothing here uses W/E otherwise.
     if (e.key === 'w' || e.key === 'W') setTool('select');
     if (e.key === 'q' || e.key === 'Q') setTool('none');
@@ -965,11 +978,52 @@ export function initFeedback({ scene, camera, renderer, controls, pickRoot = nul
   function capture({ outline = true } = {}) {
     el.style.visibility = 'hidden';
     const gizmoWas = helpers.some(h => h.visible);
-    if (!outline) boxesVisible(false);
+    // The 3D BoxHelper stays OFF in shots now — at capture resolution its 1px
+    // hairline vanished against a busy scene (a green line around a green TV
+    // screen was the reported case: "the note doesn't know what I selected").
+    // The shot gets a thick 2D outline drawn on top instead, below.
+    boxesVisible(false);
     setHelpersVisible(false);
-    renderer.render(scene, camera);
-    const data = renderer.domElement.toDataURL('image/jpeg', 0.82);
-    if (!outline) boxesVisible(true);
+    if (renderFrame) renderFrame(); else renderer.render(scene, camera);
+
+    const src = renderer.domElement;
+    const c2 = document.createElement('canvas');
+    c2.width = src.width; c2.height = src.height;
+    const g = c2.getContext('2d');
+    g.drawImage(src, 0, 0);
+
+    if (outline && selection.length) {
+      const lw = Math.max(3, Math.round(c2.width / 500));
+      g.lineWidth = lw;
+      g.strokeStyle = '#7fd18a';
+      g.font = `${Math.max(14, Math.round(c2.width / 90))}px ui-monospace, monospace`;
+      const v = new THREE.Vector3();
+      for (const o of selection) {
+        const box = new THREE.Box3().setFromObject(o);
+        if (box.isEmpty()) continue;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, behind = true;
+        for (let i = 0; i < 8; i++) {
+          v.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y,
+                i & 4 ? box.max.z : box.min.z).project(camera);
+          if (v.z < 1) behind = false;
+          const sx = (v.x * 0.5 + 0.5) * c2.width, sy = (-v.y * 0.5 + 0.5) * c2.height;
+          x0 = Math.min(x0, sx); y0 = Math.min(y0, sy);
+          x1 = Math.max(x1, sx); y1 = Math.max(y1, sy);
+        }
+        if (behind) continue;
+        x0 = Math.max(x0, lw); y0 = Math.max(y0, lw);
+        x1 = Math.min(x1, c2.width - lw); y1 = Math.min(y1, c2.height - lw);
+        g.shadowColor = 'rgba(0,0,0,0.9)'; g.shadowBlur = lw * 2;
+        g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+        const label = o.name || '(unnamed mesh)';
+        const ty = y0 > 30 ? y0 - lw * 2 : y1 + lw * 5;
+        g.fillStyle = '#7fd18a';
+        g.fillText(label, x0, ty);
+        g.shadowBlur = 0;
+      }
+    }
+    const data = c2.toDataURL('image/jpeg', 0.82);
+    boxesVisible(true);
     setHelpersVisible(gizmoWas);
     el.style.visibility = 'visible';
     return data;
